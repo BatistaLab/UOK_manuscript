@@ -3,16 +3,16 @@ set -e
 
 module load samtools
 
-cd /data/maligireddyss/18s_repeat_map
-
+cd /data/maligireddyss/18s_genomic_map
+mkdir -p pileup_files
 
 declare -A INPUTS
-INPUTS[0]="18s_BC8_1Aligned.sortedByCoord.out.bam 18s_BC8_2Aligned.sortedByCoord.out.bam"
-INPUTS[1]="18s_BC9_1Aligned.sortedByCoord.out.bam 18s_BC9_2Aligned.sortedByCoord.out.bam"
-INPUTS[2]="18s_BC10_1Aligned.sortedByCoord.out.bam 18s_BC10_2Aligned.sortedByCoord.out.bam" 
-INPUTS[3]="18s_BC11_1Aligned.sortedByCoord.out.bam 18s_BC11_2Aligned.sortedByCoord.out.bam"
-INPUTS[4]="18s_BC12_1Aligned.sortedByCoord.out.bam 18s_BC12_2Aligned.sortedByCoord.out.bam"
-INPUTS[5]="18s_BC13_1Aligned.sortedByCoord.out.bam 18s_BC13_2Aligned.sortedByCoord.out.bam"
+INPUTS[0]=18s_BC8_1Aligned.sortedByCoord.out.bam 18s_BC8_2Aligned.sortedByCoord.out.bam
+INPUTS[1]=18s_BC9_1Aligned.sortedByCoord.out.bam 18s_BC9_2Aligned.sortedByCoord.out.bam
+INPUTS[2]=18s_BC10_1Aligned.sortedByCoord.out.bam 18s_BC10_2Aligned.sortedByCoord.out.bam 
+INPUTS[3]=18s_BC11_1Aligned.sortedByCoord.out.bam 18s_BC11_2Aligned.sortedByCoord.out.bam
+INPUTS[4]=18s_BC12_1Aligned.sortedByCoord.out.bam 18s_BC12_2Aligned.sortedByCoord.out.bam
+INPUTS[5]=18s_BC13_1Aligned.sortedByCoord.out.bam 18s_BC13_2Aligned.sortedByCoord.out.bam
 INPUT=${INPUTS[$SLURM_ARRAY_TASK_ID]}
 
 declare -A OUTFILES
