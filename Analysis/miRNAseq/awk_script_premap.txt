@@ -1,0 +1,1 @@
+for f in HCA HCB HCC HWA HWB HWC NCA NCB NCC NWA NWB NWC YCA YCB YCC YWA YWB YWC OCA OCB OCC OWA OWB OWC; do awk 'BEGIN {FS = "\t" ; OFS = "\n"} {header = $0 ; getline seq ; getline qheader ; getline qseq ; if (length(seq) >= 41 && length(seq) <= 120) {print header, seq, qheader, qseq}}' < "$f".dedup.fastq  > "$f"_precursorMIRNA.fastq; done
