@@ -1,0 +1,96 @@
+---
+title: "Analysis and plotting of public RNA-seq data for UOK262"
+output: html_notebook
+author: 'Christina Fitzsimmons'
+date: 'Last updated 2023-01-30'
+---
+
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(ggrepel)
+
+# 7. Generate select plots of the data
+#gene_list <- c("METTL3", "METTL14", "FTO", "ALKBH5")
+gene_list2 <- c("ALKBH1", "ALKBH3", "ALKBH5", "ALKBH7", "FTO")
+
+public_met_tum <- read.delim(file = "./HLRC_Metastasis_v_HLRCC_Tumor.csv", sep = ",", header = TRUE) %>%
+  dplyr::mutate(log10P = -1*log10(padj)) %>%
+  dplyr::mutate(plotname = as.character(gene_name)) %>%
+  dplyr::mutate(plotname = ifelse(plotname %in% gene_list2, plotname, ""))
+
+public_met_cor <- read.delim(file = "./HLRCC_Metastasis_v_Renal_Cortex.csv", sep = ",", header = TRUE)%>%
+  dplyr::mutate(log10P = -1*log10(padj)) %>%
+  dplyr::mutate(plotname = as.character(gene_name)) %>%
+  dplyr::mutate(plotname = ifelse(plotname %in% gene_list2, plotname, ""))
+
+public_tum_cor <- read.delim(file = "./HLRCC_Tumor_v_Renal_Cortex.csv", sep = ",", header = TRUE)%>%
+  dplyr::mutate(log10P = -1*log10(padj)) %>%
+  dplyr::mutate(plotname = as.character(gene_name)) %>%
+  dplyr::mutate(plotname = ifelse(plotname %in% gene_list2, plotname, ""))
+```
+
+# plot the data
+```{r}
+
+# Mutant vs WT
+volcano_mut_tum <- ggplot(public_met_tum, aes(x=log2FoldChange, y = log10P, label = plotname)) +
+  geom_point(color = ifelse(public_met_cor$plotname == "", "black", "red")) +
+  geom_text_repel(box.padding = 0.5, 
+                  max.overlaps = Inf, 
+                  segment.color = "red",
+                  size = 3,
+                  color = "red") +
+  theme_bw() +
+  geom_vline(xintercept = -1, linetype="dashed") + geom_vline(xintercept = 1, linetype = "dashed") +
+  geom_hline(yintercept = 1.30, linetype = "dashed") +
+  labs(title = "Differential Gene Expression of Public UOK262 Data",
+       subtitle = "Metastatic Site vs Primary Tumor", x = "Log2FoldChange", y = "-Log10(padj)")
+volcano_mut_tum
+
+
+volcano_mut_cor <- ggplot(public_met_cor, aes(x=log2FoldChange, y = log10P, label = plotname)) +
+  geom_point(color = ifelse(public_met_cor$plotname == "", "black", "red")) +
+  geom_text_repel(box.padding = 0.5, 
+                  max.overlaps = Inf, 
+                  segment.color = "red",
+                  size = 3,
+                  color = "red") +
+  theme_bw() +
+  geom_vline(xintercept = -1, linetype="dashed") + geom_vline(xintercept = 1, linetype = "dashed") +
+  geom_hline(yintercept = 1.30, linetype = "dashed") +
+  labs(title = "Differential Gene Expression of Public UOK262 Data",
+       subtitle = "Metastatic Site vs Renal Cortex", x = "Log2FoldChange", y = "-Log10(padj)")
+volcano_mut_cor
+
+
+volcano_tum_cor <- ggplot(public_tum_cor, aes(x=log2FoldChange, y = log10P, label = plotname)) +
+  geom_point(color = ifelse(public_tum_cor$plotname == "", "black", "red")) +
+  geom_text_repel(box.padding = 0.5, 
+                  max.overlaps = Inf, 
+                  segment.color = "red",
+                  size = 3,
+                  color = "red") +
+  theme_bw() +
+  geom_vline(xintercept = -1, linetype="dashed") + geom_vline(xintercept = 1, linetype = "dashed") +
+  geom_hline(yintercept = 1.30, linetype = "dashed") +
+  labs(title = "Differential Gene Expression of Public UOK262 Data",
+       subtitle = "Primary Tumor Site vs Renal Cortex", x = "Log2FoldChange", y = "-Log10(padj)")
+volcano_tum_cor
+
+
+pdf("2023.01.30_UOK262_publicdata_volcano_metastatic_over_primary.pdf", 
+    useDingbats=FALSE,
+    width=6, height=4)
+volcano_mut_tum
+dev.off()
+
+pdf("2023.01.30_UOK262_publicdata_volcano_primary_over_cortex.pdf", 
+    useDingbats=FALSE,
+    width=6, height=4)
+volcano_tum_cor
+dev.off()
+
+```
+
