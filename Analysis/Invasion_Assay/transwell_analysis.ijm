@@ -1,5 +1,5 @@
-dir1 = getDirectory("/Users/lungerjc/Documents/Phenotype Assays/Invasion Assays/Transwell Invasion/2_23_2021_invasion_10k_48hr/invaded_cells/Cropped");
-dir2 = getDirectory("/Users/lungerjc/Documents/Phenotype Assays/Invasion Assays/Transwell Invasion/2_23_2021_invasion_10k_48hr/invaded_cells/Cropped/Results");
+dir1 = getDirectory("/Users/fitzsimmonscm/Documents/Phenotype Assays/Invasion Assays/Transwell Invasion/invaded_cells/Cropped");
+dir2 = getDirectory("/Users/fitzsimmonscm/Documents/Phenotype Assays/Invasion Assays/Transwell Invasion/invaded_cells/Cropped/Results");
 list = getFileList(dir1);
 setBatchMode(true);
 for (i=0; i<list.length; i++) {
