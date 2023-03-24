@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --time=10:00:00
-#SBATCH --mem=20GB
-#SBATCH --cpus-per-task=12
+#SBATCH --mem=24GB
+#SBATCH --cpus-per-task=20
 #SBATCH --gres=lscratch:32
 #SBATCH --job-name=ADAPTOR_TRIMMING
 #SBATCH --error=%x_%A_%a.err
@@ -9,8 +9,8 @@
 
 cd $SLURM_SUBMIT_DIR
 
-module load cutadapt
-module load umitools
+module load cutadapt/3.4
+module load umitools/1.1.1
 
 directory=$(awk "NR==${SLURM_ARRAY_TASK_ID} {print \$1}" samples_to_map.txt)
 read1=$(awk "NR==${SLURM_ARRAY_TASK_ID} {print \$2}" samples_to_map.txt)

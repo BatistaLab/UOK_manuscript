@@ -9,9 +9,9 @@
 
 cd $SLURM_SUBMIT_DIR
 
-module load STAR
-module load umitools
-module load samtools
+module load STAR/2.7.6a
+module load umitools/1.1.1
+module load samtools/1.11
 
 directory=$(awk "NR==${SLURM_ARRAY_TASK_ID} {print \$1}" samples_to_map.txt)
 read1=$(awk "NR==${SLURM_ARRAY_TASK_ID} {print \$2}" samples_to_map.txt)
@@ -24,8 +24,8 @@ size=100
 
 STAR \
     --readFilesIn Processed_${sample}.fastq.gz \
-    --genomeDir /fdb/STAR_current/UCSC/mm10/genes-${size} \
-    --runThreadN 12 --genomeLoad LoadAndRemove \
+    --genomeDir /fdb/STAR_indices/2.7.6a/UCSC/hg38/genes-${size} \
+    --runThreadN 14 --genomeLoad LoadAndRemove \
     --limitBAMsortRAM 20000000000 \
     --readFilesCommand zcat \
     --outFileNamePrefix ${sample}_ \

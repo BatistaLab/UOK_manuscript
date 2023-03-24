@@ -1,9 +1,8 @@
 #!/bin/bash
 #SBATCH --time=10:00:00
 #SBATCH --mem=60GB
-#SBATCH --cpus-per-task=12
-#SBATCH --gres=lscratch:64
-#SBATCH --job-name=hp_miRNA
+#SBATCH --cpus-per-task=15
+#SBATCH --job-name=mature_miRNA
 #SBATCH --error=%x_%A_%a.err
 #SBATCH --output=%x_%A_%a.out
 
@@ -17,16 +16,15 @@ read2=$(awk "NR==${SLURM_ARRAY_TASK_ID} {print \$3}" samples_to_map.txt)
 sample=$(awk "NR==${SLURM_ARRAY_TASK_ID} {print \$4}" samples_to_map.txt)
 size=100
 
-
-#precursor miRNAs
+#mature miRNAs
 
 STAR \
-	--readFilesIn ${sample}_precursorMIRNA.fastq \
-	--genomeDir /fdb/STAR_current/UCSC/mm10/genes-${size} \
-	--runThreadN 12 --genomeLoad NoSharedMemory \
-	--sjdbGTFfile /data/JV_lab/datasets/annotations/mm10/mirbase_mmu.gff3 \
+    --readFilesIn ${sample}_matureMIRNA.fastq \
+	--genomeDir /fdb/STAR_indices/2.7.6a/UCSC/hg38/genes-${size} \
+	--runThreadN 14 --genomeLoad NoSharedMemory \
+	--sjdbGTFfile /data/maligireddyss/datasets/hsa.gff3 \
 	--sjdbGTFfeatureExon miRNA_primary_transcript --sjdbGTFtagExonParentTranscript ID --sjdbGTFtagExonParentGene Name \
-	--outFileNamePrefix hp_miRNA/${sample}_hpMIR_ \
+	--outFileNamePrefix mature_miRNA/${sample}_matureMIR_ \
 	--alignEndsType EndToEnd \
 	--outFilterMismatchNmax 1 \
 	--outFilterMultimapScoreRange 0 \
@@ -43,4 +41,6 @@ STAR \
 	--outWigType wiggle \
 	--outWigStrand Stranded \
 	--outWigNorm RPM \
+
+
  
