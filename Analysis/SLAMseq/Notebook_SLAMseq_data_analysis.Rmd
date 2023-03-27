@@ -1,0 +1,407 @@
+---
+title: "Bioinformatic Analysis of SLAM-seq Data"
+output: rmdformats::readthedown
+author: Christina Fitzsimmons
+last updated: "2021-03-22"
+---
+
+# 1. Introduction
+This notebook is an outline of the data analysis that is performed for SLAMseq metabolic labeling. This notebook assumes that you have already generated library following the protocol of [**Herzog et al. Nature Methods 2017**](https://www.ncbi.nlm.nih.gov/pubmed/28945705). 
+
+These notes cover pre-processing of the data, analysis using the SLAMDUNK pipeline, methods of half-life calculation, and finally intersecting the metabolic labeling data with other types of next-generation sequencing, including RNA-seq and m6A-IP. The sections are presented here in the order in which you would perform the analyses. Alternatively, you can use the side bar to navigate through the document. Links are included throughout to provide additional information about the tools that were used. 
+
+This notebook follows the data analysis of C.Fitzsimmons UOK262 SLAM-seq Library 2. Certain sections may be adapted to analyze your own individual library / data. 
+
+# 2. Data Pre-processing and Prep
+The data were sequenced at NIAMS (Hafner Lab) using an Illumina HiSeq 3000 machine. This type of platform was used because the type of chemistry that is utilized is the older 4-color chemistry model. This type of 4-color chemistry is being phased out in favor of the new 2-color chemistry system. As a result, adaptation may be required for future sequencing runs. 
+
+## 2.1 bcl File Conversion
+The first step in the data analysis is to convert the binary bcl sequencing files to fastq file format for downstream analysis. The [bcl2fastq program](https://hpc.nih.gov/apps/bcl2fastq.html)is on the NIH biowulf and is the primary program for the conversion of Illumina data. In addition to file conversion, it also demultiplexes fastq files (separates them based on barcode). This program may be run on an sinteractive or sbatch session. A sample sbatch file is shown below. 
+
+**Note:** *Because bcl2fastq runs in a multi-threaded manner, it is critical to limit the number of threads or it will use all available.* 
+**Sample sbatch code:**
+```{bash eval=FALSE}
+#! /bin/bash
+
+module load bcl2fastq/2.20.0 || exit 1
+bcl2fastq --runfolder-dir /path/to/your/run/folder/ \
+          --output-dir ./123456_out \
+          -r 4 -w 4 -p 14 \
+          --barcode-mismatches 0
+```
+## 2.2 Fastq Quality Check
+Quality control of the data was performed using fastqc. For the number of samples in this analysis, it was preferable to run a swarm file. An example of the swarm analysis is below:
+
+**Sample swarm code:**
+```{bash eval=FALSE}
+# Usage parameters
+# cd dir1;fastqc -o output_dir [-f fastq|bam|sam] -c contaminant_file seqfile1 .. seqfileN
+# zipped files are acceptable for fastqc
+
+cd /data/path/to/input/directory/Sample_1;fastqc -o /data/path/to/out/dir/Sample1_out -f fastq my_sample1.fastq.gz
+cd /data/path/to/input/directory/Sample_2;fastqc -o /data/path/to/out/dir/Sample2_out -f fastq my_sample2.fastq.gz
+# etc
+
+```
+### 2.2.1 Sample FastQC Read Information
+Below is sample data read output from the fastqc on *C. Fitzsimmons UOK262 SLAMseq Library #2*. FastQC also generates a number of html reports that provide information about quality scores, read length, and other read statistics. These reports can be downloaded from Biowulf for future reference. The reports can also be compiled into 1 document using the MultiQC report generator. Instructions for compiling that document as well as integrating other types of QC output can be found below in the Alleyoop section (**section 3.2**). 
+
+**Experiment Name:**	100Cycle_PE_MH						
+**Date:** 2019-10-15	
+**Instrument:** HiSeq3000
+	
+|Sample_ID|Sample_Name| Index| Total Sequences (FastQC)|
+|:----|:----|:-----|:-----|
+|Sample_1	|Mut omitA			|CAGCGT	|20748019 	
+|Sample_2	|Mut omitB			|GATCAC	|	26293669
+|Sample_3	|Mut omitC			|ACCAGT	|	15718076
+|Sample_4	|Mut 0hrA			|TGCACG		| 14610745
+|Sample_5	|Mut 0hrB			|ACATTA		| 10209412
+|Sample_6	|Mut 0hrC			|GTGTAG		| 18540716
+|Sample_7	|Mut 6hrA			|CTAGTC		| 24898767
+|Sample_8	|Mut 6hrB			|TGTGCA	| 11002231
+|Sample_9	|Mut 6hrC			|TCAGGA	|	7226231
+|Sample_10	|Mut 12hrA			|CGGTTA| 18604597
+|Sample_11	|Mut 12hrB			|TTAACT |	9208280
+|Sample_12  |Mut 12hrC			|ATGAAC	| 7723874
+|Sample_13	|WT omitA			|CCTAAG	|	8105245
+|Sample_14	|WT omitB			|AATCCG	|	7865203
+|Sample_15	|WT omitC			|GGCTGC	|	8746671
+|Sample_16	|WT 0hrA			|TACCTT	|	10398244
+|Sample_17	|WT 0hrB			|TCTTAA	|	10711000
+|Sample_18	|WT 0hrC			|GTCAGG	|	17123956
+|Sample_19	|WT 6hrA			|ATACTG	|	11653040
+|Sample_20	|WT 6hrB			|TATGTC	|	7570878
+|Sample_21	|WT 6hrC			|GAGTCC	|	14463630
+|Sample_22	|WT 12hrA			|GGAGGT	| 19372883
+|Sample_23	|WT 12hrB			|CACACT	|	8538170
+|Sample_24	|WT 12hrC			|CCGCAA	| 12450534
+
+**Note:** *The original paper recommends 20,000-30,000 reads per barcode to ensure good coverage for SNP calling and half-life analysis. As you can see above, not all barcodes had equal coverage. If this is the case, it may be advantageous to re-mix and re-submit remaining library material to ensure good read depth.*
+
+## 2.3 Extracting Transcript Regions
+In order to run SLAMDUNK, we need to provide the program a bed file containing the start / end locations of the 3'UTRs for all of the genes. To generate this file, I ran Stephen Floor's [*Extract Transcript Regions*](https://github.com/stephenfloor/extract-transcript-regions) script. This program takes either a knownGene.txt file for some genome from the UCSC genome browser or a GTF for transcripts from Ensembl and decomposes it into a separate bed file for each of the following transcript regions:
+
+**Regions:**
+
+*  exons
+*  introns
+*  exons from coding transcripts
+*  introns from coding transcripts
+*  exons from noncoding transcripts
+*  introns from noncoding transcripts
+*  5' UTRs for coding transcripts
+*  5' UTRs + start codon + 27 nucleotides of transcript (to calculate Kozak context & uORF overlap with start)
+*  CDS for coding transcripts
+*  3' UTRs for coding transcripts
+
+This script was used to extract transcript regions from the [Gencode V27 Comprehensive Gene Annotation GTF](https://www.gencodegenes.org/human/release_27.html). Version 27 was used because we had previously analyzed RNA-seq and m6A-IP data using this version of the genome. The files were output into a new directory named *SLAMbeds*. When submitted as a batch job, the script takes less than 5 min to run to completion. 
+
+**Sample sbatch code:**
+```{bash eval = FALSE}
+#!/bin/bash
+set -e
+
+module load  python
+python /data/path/to/extract-transcript-regions-master/extract_transcript_regions.py \
+-i /data/path/to/gencode.v27.annotation.gtf.gz \
+-o SLAMbeds \
+--gtf
+```
+### 2.3.1 Output from *Extract_Transcript_Regions.py*
+Below is sample output from the `Extract_Transcript_Regions.py` script. As you can see, the ENST_IDs contain both the version ID (the information after the period) as well as the 3UTR suffix. This information can be removed using either command line syntax or a program such as Rstudio. 
+
+**Sample Transcript Regions Output:**
+
+|chr|start|end|ENST_ID|score|strand|
+|:---|:---|:---|:---|:---|:----|
+|chr11|	103064274	|103066564	|ENST00000527779.1_3utr	|0	|-|	
+|chr3|	38122602	|38122737	|ENST00000346219.7_3utr	|0	|+	|
+|chr13|	39009865	|39011367	|ENST00000625998.2_3utr	|0	|-	|
+
+In addition to removing the information following the ` . ` it may also be important to replace the transcript IDs with Gene IDs or Gene Names. SLAMDUNK data post-processing has an option to "read collapse" the transcripts. This tool allows you to collapse all 3’UTR entries of the count file into one single entry per 3’UTR (similar to the exons->gene relationship in a gtf-file). All entries with identical 3’UTR IDs will be merged. However, in order for this function to work, the supplied bed file must have ENSG or Gene names in the 4th column. 
+
+### 2.3.2 Converting Transcript IDs to Gene IDs or Gene Names
+Conversion from ENST to ENSG may be accomplished by a number of programs. Two popular programs for Rstudio are the [biomaRt suite](https://useast.ensembl.org/info/data/biomart/how_to_use_biomart.html) and the [gProfiler suite](https://biit.cs.ut.ee/gprofiler/page/r). These programs take an input list (*i.e.* ENST) and return the desired output (*i.e.* ENSG). Below is an example using the gProfiler R package:
+
+```{r eval=FALSE}
+install.packages("gprofiler2")
+library(gprofiler2)
+# Building a query to gprofiler for the Read Collapse Data
+df_geneID <- gconvert(query = ReadCollapse$Trans_ID, organism = "hsapiens", target="ENSG", mthreshold = Inf, filter_na = FALSE)
+```
+These lists containing both ENST and ENSG information can then be used to convert the 4th column of the bed file. Below is an example with the name column in ENSG format. 
+
+**3'UTR Bed File Converted to ENSG:**
+
+|chr|start|end|ENSG_ID|score|strand|
+|:---|:---|:---|:---|:---|:----|
+|chr11	|103064274	|103066564	|ENSG00000137692	|0	|-	
+|chr3	|38122602	|38122737	|ENSG00000008226	|0	|+	
+|chr13	|39009865	|39011367	|ENSG00000120685	|0	|-	
+
+
+## 2.4 Sample Manifest
+The sample manifest is a tab-separated plain text file with information about the filepath, sample description, sample type (pulse / chase), and timepoint. This information is passed to the SLAMDUNK scripts for analysis. The manifest is useful for processing multiple sample files at a time. The information contained in each column is below, as well as a sample manifest from the UOK262 data analysis. 
+
+**Manifest Information:**
+
+|Column	|Datatype	|Description|
+|:---|:---|:---|
+|Filepath	|String	|Path to raw reads in BAM/fasta(gz)/fastq(gz) format
+|Sample Description	|String	|Description of the sample
+|Sample Type	|String	|Type of sample (pulse/chase)
+|Timepoint	|Integer	|Timepoint of the sample in minutes 
+
+**Example SLAMDUNK Manifest File:**
+
+|Filepath |Sample Description |Sample Type |Timepoint |
+|:---|:---|:---|:----|
+|/data/path/to/Sample1.fastq.gz	|wt_omit_rep1	|control	|0
+|/data/path/to/Sample2.fastq.gz	|wt_0_rep1	|chase	|0
+|/data/path/to/Sample3.fastq.gz	|wt_6_rep1	|chase	|360
+|/data/path/to/Sample4.fastq.gz	|wt_12_rep1	|chase	|720
+**Note:** *Do not include a header row on the manifest file supplied to SLAMDUNK or it will raise an error*
+
+
+# 3. Running the Pipeline
+After generating the 3'UTR bed file and the sample manifest, you are now ready to run the [SLAMDUNK pipeline](http://t-neumann.github.io/slamdunk/docs.html#document-Introduction). SLAMDUNK was developed by Tobias Neumann as part of the original Nature Methods paper. Slamdunk is a modular analysis software designed to map NGS reads to the genome, call T > C SNP variants, and count conversion statitics. Modules are dubbed *"dunks"* and each dunk builds upon the results from the previous dunks. The dunks may either be run individually or sequentially. In addition to the main data analysis pipeline, SLAMDUNK also has a number of post-processing modules (*"Alleyoop"*) that are available to calculate statistics of various parameters. 
+
+## 3.1 Running SLAMDUNK
+Slamdunk is available as a Docker container. While Docker is not available on Biowulf, the Singularity container system (which is available) can run Docker images. To run SLAMDUNK on Biowulf, load the singularity module, pull the docker container, and run SLAMDUNK via that Docker image.
+
+**Note:** *Remember to give the environment variable *`$SINGULARITY_BINDPATH`*access to all directories it needs. At a minimum, it needs the path to the reference genome and the raw data* 
+
+**Note:** *Create the output directory prior to submitting your job to the cluster*
+
+Below is a sample script and command line input to run SLAMDUNK on the Biowulf. For the UOK262 data, this was run using the `slamdunk all` command on SLAMDUNK v0.4.2 using Singularity v3.5.3. For 12 files, the approximate run time should be 6-8 hours on the ccr partition. Unless specified, the default values were used for all parameters. 
+
+```{bash eval=FALSE}
+#!/bin/bash
+set -e
+
+module load singularity
+export SINGULARITY_BINDPATH="/data/BatistaLab_NGS/SLAMseq/"
+singularity exec docker://tobneu/slamdunk slamdunk all /data/BatistaLab_NGS/SLAMseq/path/to/Library2_manifest.tsv \
+  -r /data/BatistaLab_NGS/SLAMseq/path/to/GRCh38.p10.genome.fa \
+  -b /data/BatistaLab_NGS/SLAMseq/path/to/SLAMbeds_v27_3utr.bed \
+  -o /data/BatistaLab_NGS/SLAMseq/path/to/SLAMseq_output/gencodev27 \
+  -t $SLURM_CPUS_PER_TASK \
+  -5 12 \
+  -a 4 \
+  -rl 500 \
+  -m
+```
+```{bash eval=FALSE}
+# Command line input parameters for the above script
+sbatch --partition=ccr --mail-type=END,FAIL --cpus-per-task=8 --mem=40g --time=12:00:00 slamdunk_all_library2_mutant_v27.sh
+```
+### 3.1.1 Required and Optional Flags for SLAMDUNK
+SLAMDUNK has several required inputs, as well as a number of optional flags for various modules. The required and optional flags, and a short description of each are listed below. 
+
+|Required? |Flag |Flag Description|
+|:-|:-|:-----|
+|Required | -r | /path/to/reference/genome.fa
+|Required |-o |/path/to/output/directory (create before job submission)
+|Required | -b |/path/to/3'UTRcoordinates.bed
+|Required | |/path/to/sample_manifest.tsv
+|Required | -rl |Maximum read length
+|Optional | -t |number of threads you need
+|Optional |-5	|Number of bases that will be hard-clipped from the 5’ end [map]
+|Optional | -a|Maximum number of A at the 3’ end of a read
+|Optional|-n|The maximum number of alignments that will be reported for a multi-mapping read [map]
+|Optional|-q|Deactivates NextGenMap’s SLAMSeq alignment settings [map]
+|Optional |-e|Switches to semi-global alignment instead of local alignment [map]
+|Optional |-m|Use 3’UTR annotation to filter multimappers [filter]
+|Optional |-mq|Minimum mapping quality required to retain a read [filter]
+|Optional |-mi|Minimum alignment identity required to retain a read [filter]
+|Optional |-nm|Maximum number of mismatches allowed in a read [filter]
+|Optional |-mc|Minimum coverage to call a variant [snp]
+|Optional |-mv|Minimum variant fraction to call a variant [snp]
+|Optional |-mts|Only T->C conversions in reads with more than 1 T->C conversion will be counted. [count]
+|Optional |-mbq|	Minimum base quality for T->C conversions to be counted [count]
+
+### 3.1.2 A Note On Multimappers
+The default option for the SLAMDUNK pipeline is to discard multi-mappers. However, because the QuantSeq 3' FWD library kit is designed to specifically enrich for the 3’ UTRs of mRNA, we only consider alignments to annotated 3’ UTRs as relevant. By including the ` -m ` flag, SLAMDUNK will attempt to reconcile multi-mapping reads. For instance, if a reads aligns to 1 3'UTR and 1 non-UTR, it will be assigned to the 3'UTR. Below is an example of reads from our analysis where we either omit or include this ` -m ` flag. Inclusion of multi-mappers increases the reads retained after filtering by approx 5-6%. 
+
+|Sample_Name| Mapped| Filter (omit `-m`) | Filter (include `-m`)|
+|:----|:----|:-----|:-----|
+|Mut omitA|18529029|11882928|13010343
+|Mut omitB|23862014|10233952|11202022
+|Mut omitC|14373276|6345087|6934601
+|Mut 0hrA|12615182|6975177|7685629
+|Mut 0hrB|9018953|5377683|5941442
+|Mut 0hrC|16665078|9579510|10607601
+|Mut 6hrA|22205467|14798999|15694285
+|Mut 6hrB|10265961|7466379|8036282
+|Mut 6hrC|6852386|4977908|5339373
+|Mut 12hrA|17842987|13373146|14388977
+|Mut 12hrB|8309946|6278019|6723374
+|Mut 12hrC|7228814|5545868|6002926
+|WT omitA|7032754|4427302|4795490
+|WT omitB|6852560|3298207|3617830
+|WT omitC|7414442|4241275|4644725
+|WT 0hrA|8720310|4879141|5418901
+|WT 0hrB|8475529|4206607|4687428
+|WT 0hrC|14324399|8405289|9283726
+|WT 6hrA|9734604|6554080|7071149
+|WT 6hrB|6877867|4869621|5264183
+|WT 6hrC|13459297|9926275|10644839
+|WT 12hrA|16467103|11595856|12520746
+|WT 12hrB|7809871|5285045|5691127
+|WT 12hrC|11539985|8432460|8986115
+
+### 3.1.3 Typical Output File
+The output from SLAMseq is a 16-column count file which contains information about the conversion rates and other statistics for each UTR. This information is used in downstream half-life calculations.  
+
+**Typical Tcount File**
+```{bash eval=FALSE}
+Chromosome	Start	End	Name	Length	Strand	ConversionRate	ReadsCPM	Tcontent	CoverageOnTs	ConversionsOnTs	ReadCount	TcReadCount	multimapCount	ConversionRateLower	ConversionRateUpper
+chr11	103064274	103066564	ENST00000527779.1_3utr	2290	-	0.061224489795918366	1.1072355815321224	765	98	6	6	3	0	-1.0	-1.0
+chr3	38122602	38122737	ENST00000346219.7_3utr	135	+	0	0	26	0	0	0	0	0	-1.0	-1.0
+chr13	39009865	39011367	ENST00000625998.2_3utr	1502	-	0.08926615553121577	12.364130660442035	511	1826	163	67	60	0	-1.0	-1.0
+
+```
+
+## 3.2 Post-Processing Statistics
+In addition to the main pipeline, SLAMDUNK has a number of built-in scripts to perform post-processing and statistical analysis of the data prior to half-life calculations. There are a number of useful scripts. Detailed below are the modules most commonly used in the analysis of the UOK262 data, as well as information about report generation with MultiQC. Many of these tools run quickly (5 min or less) and can be run from an sinteractive session. 
+
+### 3.2.1 3'UTR Rates
+This tool checks the individual conversion rates per 3’UTR and plots them as boxplots. Each conversion is normalized to all possible conversions from it’s starting base e.g. A->G / (A->A + A->G + A->C + A->T). This command may be run from an interactive session or submitted as a batch. When run as a batch job, this takes approximately 20-30 min. 
+
+**Sample Batch Job**
+```{bash eval=FALSE}
+#!/bin/bash
+set -e
+
+module load singularity/3.7.2
+export SINGULARITY_BINDPATH="/data/BatistaLab_NGS/SLAMseq/"
+singularity run docker://tobneu/slamdunk:v0.3.4
+
+alleyoop utrrates -r /data/path/to/GRCh38.p10.genome.fa \
+-b /data/path/to/SLAMbeds_v27_3utr.bed \
+-o /data/path/to/output/directory \ # 
+-t 12 \ 
+/data/path/to/filter/reads/*.bam
+
+```
+### 3.2.2 Read Collapse
+This tool allows you to collapse all 3’UTR entries of a tcount file into one single entry per 3’UTR (similar to the exons->gene relationship in a gtf-file). All entries with identical 3’UTR IDs will be merged. As stated above in section **2.3.2**, for this feature to work correctly, it is critical that the bed file used for filtering / counting have ENSG_IDs or Gene Names instead of ENST_IDs. When run as a batch job, this takes less than 10 min on the ccr partition. 
+
+**Sample Batch Job**
+```{bash eval=FALSE}
+#!/bin/bash
+set -e
+
+module load singularity
+export SINGULARITY_BINDPATH="/data/BatistaLab_NGS/SLAMseq/"
+singularity run docker://tobneu/slamdunk:v0.3.4
+
+alleyoop collapse /data/path/to/count/directory/*tsv \
+-t 12 \
+-o /data/path/to/output/directory/readcollapse 
+```
+### 3.3 Report Integration with MultiQC
+MultiQC searches a directory looking for logs files from bioinformatics tools and compiles all samples and output files them into a single html report. The FASTQC and output from several ALLEYOOP modules can be integrated into a single report using [MultiQC on the Biowulf](https://hpc.nih.gov/apps/multiqc.html).MultiQC currently supports the *summary* , *rates* , *utrrates* , *tcperreadpos* and *tcperutrpos* modules from ALLEYOOP and can be run in an interactive session or as a batch job.
+
+**Sample MultiQC Sbatch Job**
+```{bash eval=FALSE}
+#!/bin/bash
+module load multiqc || exit 1
+multiqc -i 'my report title' /path/to/my/project/directory
+```
+### 3.3.1 MultiQC options
+MultiQC has a number of options for customizing reports. Below are several useful options. For more detailed options and configurations, the [MultiQC website](https://multiqc.info/docs/#) has detailed documentation. 
+
+|Option|Description|
+|:--|:---|
+|-f|Overwrite any existing reports
+|-i|Report title. Printed as page header
+|-n|Report filename. Use 'stdout' to print to standard out.
+|-o|Create report in the specified output
+|-x|Ignore analysis files (glob expression)
+|-m|Use only this module. Can specify multiple times.
+|-p|Export plots as static images in addition to the report
+|--pdf|Creates PDF report with 'simple' template.Requires Pandoc to be installed.
+
+
+
+# 4. Half-life Analysis
+The next step in data analysis is calculating half-life of the transcripts. This can be accomplished in a few different ways. The first method utilizes Rstudio to fit an exponential first-order decay to the data. The second method was utilized by the Jaffrey Lab in their [2019 *Mol Cell* paper](https://www.ncbi.nlm.nih.gov/pubmed/31279658). It also uses an exponential decay model, but fits the half-life between the 0 and 6 hr time points. We will walk through the NLS method in this notebook. 
+
+## 4.1 First-Order Decay Model
+This method uses a nls function to fit a first-order decay model to the SLAMseq data. I have broken the script into smaller pieces below to explain what each is doing. 
+
+**NOTE:** *This script should be run as Rscript from the command line. Running this as either and RNotebook or an Rscript in the Rstudio IDE may cause your computer to crash.*
+
+### 4.1.1 Import the data
+Below is an example of the import function used to import the read-collapsed data into R for analysis. Several columns are added to indicate the *cell type*, *timepoint*, and *replicate* at this stage. 
+```{r eval=FALSE}
+# Libraries Used
+library(tidyverse)
+library(broom)
+library (minpack.lm)
+library (purrr)
+
+# DEFINING THE IMPORT FUNCTION
+read_NGS_output_file <- function(filepath) {
+  data <- read_tsv(filepath, col_types = list(
+    gene_name = col_character(),
+    length = col_integer(),
+    readsCPM = col_double(), 
+    conversionRate = col_double(),    
+    Tcontent = col_double(),
+    coverageOnTs = col_double(),
+    conversionsOnTs = col_double(),
+    readCount = col_double(),
+    tcReadCount = col_double(),
+    multimapCount = col_double()
+  ))
+  return(data)
+}
+
+#### Adding information to dataframe
+MA_0hr <- read_NGS_output_file(filepath = "Mut_0hrA_S4_L008_R1_001.fastq_slamdunk_mapped_filtered_tcount_collapsed.csv") %>% 
+  dplyr::mutate ('variant' = 'Mutant', replicate = 'A', timepoint = 0, short='MA0') 
+
+```
+### 4.1.2 Bind the data into a single column and filtering. 
+In order to perform the analysis, we now combine all the individual values vertically into 1 dataframe. At this point, we also filter the data so that all rows have a minimum of *10 counts* and all genes have *18 replicates* (3 replicates x 3 timepoints x 2 cell types = 18).
+```{r eval=FALSE}
+# Bind Data into 1 vertical df
+fulldata <- bind_rows(MA_0hr, MA_6hr, MA_12hr, MB_0hr, MB_6hr, MB_12hr, MC_0hr, MC_6hr, MC_12hr, 
+                      WA_0hr, WA_6hr, WA_12hr, WB_0hr, WB_6hr, WB_12hr, WC_0hr, WC_6hr, WC_12hr) %>%
+  dplyr::filter(readCount >= 10) %>%
+  dplyr::add_count(gene_name, name = 'replicate_count') %>%
+  dplyr::filter (replicate_count == 18) %>%
+  ungroup()
+```
+### 4.1.3 Half-Life Calculations
+In this section of the code, we define the half-life function and perform the non-linear fit. 
+```{r eval=FALSE}
+# Define the half-life function and perform the calculation
+# a = A0, the initial decay rate at time t = 0 hr; b = half-life
+half_fxn <- function(x, a, b) {
+  a*2^(x/-b) }
+
+fitted_data <- fulldata %>%
+  group_by(gene_name, Variant) %>%
+  do (fit = possibly(nls, NULL)(conversionRate~half_fxn(timepoint, a, b), data= ., start = list(a = 0.05, b = 0.5)))
+```
+###4.1.4 Extract Model Parameters and Export
+The parameters values obtained by the model, the residuals of the modeling, and the goodness of fit measures are extracted and exported to dataframes for downstream analysis. 
+```{r eval=FALSE}
+df1 <- fitted_data %>% tidy(fit) # extracts fit parameters and puts them into dataframe
+df2 <- fitted_data %>% augment(fit) # similar to the predict / summarize functions
+df3 <- fitted_data %>% glance (fit) # gives nice model summary / goodness of fit measures
+
+# Exporting the data for downstream analysis
+write.csv(fulldata, file="fulldata_v27_collapse_preanalysis.csv")
+write.csv(df1, file="SLAMseq_v27_collapse_halflife_modelfit_tidy.csv")
+write.csv(df2, file="SLAMseq_v27_collapse_halflife_modelfit_augment.csv")
+write.csv(df3, file="SLAMseq_v27_collapse_halflife_modelfit_glance.csv")
+```
+# 5. Wrap-up and conclusions
+At this point, you have performed half-life calculations for your library. You can now analyze the data for interesting trends or genes of interest. In our case, we have intersected this data with both the RNAseq and m6A-IP libraries, to determine how m6A modification may impact transcript stability in our cell line. 
+
+If you have any questions about this walk-though, or if you find an error, please let me know! This is also some of the very first R-code that I wrote, so there are bound to be faster ways of doing things. Please also let me know if there are more efficient ways to do things as I'm always excited to learn! 
