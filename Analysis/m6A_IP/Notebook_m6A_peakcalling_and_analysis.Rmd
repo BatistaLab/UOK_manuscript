@@ -1,0 +1,314 @@
+---
+title: "Repeat Peak-calling and m6A-IP Analysis"
+output: rmdformats::readthedown
+author: "Christina Fitzsimmons"
+date: "Last updated 2021-03-21"
+
+---
+
+# Introduction
+This notebook is a walk-through of our analysis of the m6A-IP data. These steps are primarily performed on the cluster, with a separate R notebook for the differential expression analysis we do for the peaks. If a question is not addressed here, it may be addressed in a downstream notebook (e.g. SLAM-seq-m6A-IP interesection). 
+
+# 1. Trim Adapters
+This step was not repeated between mapping with gencode v27 and gencode v35.
+
+# 2. Mapping to the Genome
+## 2.1 Mapping to Repeat Genome
+Data is first mapped to a costume genome that includes rRNA and repeat sequenced in the genome. Any reads that don’t map to the ‘repeat’ genome are then mapped to the human genome. Since we are repeating analysis with gencode v35 to improve 5'UTR and 3'UTR coverage, I also took the opportunity to update some of the software that is being used to the most recent versions (e.g. samtools, STAR, etc).
+
+###2.1.1 Generating Updated Repeat Index
+The files that Pedro originally had made were generated with a version of STAR that is not available on the Biowulf and not compatible with what I was doing. An error message about updating indices was generated upon my first run. Thus, I generated a new repeat index with the following command line input:
+```{bash Repeat Generation, eval=FALSE}
+
+#! /bin/bash
+# This script generates a repeat index for STAR/2.7.6a using PB repeat RNA fasta file
+set -o pipefail
+set -e
+
+function fail {
+    echo "$@" >&2
+    exit 1
+    }
+
+module load samtools/1.11         || fail "could not load samtools module"
+module load STAR/2.7.6a          || fail "could not load STAR module"
+
+cd /data/BatistaLab_NGS/annotations/
+mkdir -p repeat_Index_STAR2.7.6a
+
+STAR \
+  --runThreadN $SLURM_CPUS_PER_TASK \
+  --runMode genomeGenerate \
+  --genomeDir repeat_Index_STAR2.7.6a \
+  --genomeFastaFiles /data/BatistaLab_NGS/annotations/repeat_Index/repeatRNA.fa \
+
+# make sure all gtf and fasta files are unzipped or this mode will fail!
+# Note! STAR/2.5.4 indices are not compatible with newer versions of STAR. This was failing previously--this script should update. 
+
+```
+###2.1.2 Mapping to the Repeat Genome
+Data can now be mapped to the updated repeat genome. This repeat genome includes rRNA and repeat sequences in the genome.
+```
+sbatch --cpus-per-task=10 --mem=40g --partition=ccr \
+--mail-type=END,FAIL --array=0-11, 262_repeatmap_STAR2.7.a.sh 
+```
+```{bash Repeat Mapping, eval=FALSE}
+
+#! /bin/bash
+# This file is for the UOK262 mapping to repeat index
+export TMPDIR=/lscratch/$SLURM_JOB_ID
+set -o pipefail
+set -e
+
+function fail {
+    echo "$@" >&2
+    exit 1
+    }
+
+module load samtools/1.11         || fail "could not load samtools module"
+module load STAR/2.7.6a          || fail "could not load STAR module"
+
+cd /data/BatistaLab_NGS/UOK_manuscript/m6AIP/262_map_repeats || fail "no such directory"
+mkdir -p STAR2.7.6a
+GENOME=/data/BatistaLab_NGS/annotations/repeat_Index_STAR2.7.6a
+
+# I give the absolute file path here because not everything is in the same directory. 
+declare -A INPUTS
+INPUTS[0]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/combine_runs/comb2.rmdup.trimm.fastq
+INPUTS[1]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/combine_runs/comb4.rmdup.trimm.fastq
+INPUTS[2]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/combine_runs/comb5.rmdup.trimm.fastq
+INPUTS[3]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/run_1_rmdup_trimm/6.rmdup.trimm.fastq
+INPUTS[4]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/run_1_rmdup_trimm/7.rmdup.trimm.fastq
+INPUTS[5]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/run_1_rmdup_trimm/12.rmdup.trimm.fastq
+INPUTS[6]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/combine_runs/comb13.rmdup.trimm.fastq
+INPUTS[7]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/combine_runs/comb14.rmdup.trimm.fastq
+INPUTS[8]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/combine_runs/comb15.rmdup.trimm.fastq
+INPUTS[9]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/combine_runs/comb16.rmdup.trimm.fastq
+INPUTS[10]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/combine_runs/comb18.rmdup.trimm.fastq
+INPUTS[11]=/data/BatistaLab_NGS/UOK_m6A_IP/fastq_files/combine_runs/comb19.rmdup.trimm.fastq
+INPUT=${INPUTS[$SLURM_ARRAY_TASK_ID]}
+
+declare -A OUTNAMES
+OUTNAMES[0]=BC2
+OUTNAMES[1]=BC4
+OUTNAMES[2]=BC5
+OUTNAMES[3]=BC6
+OUTNAMES[4]=BC7
+OUTNAMES[5]=BC12
+OUTNAMES[6]=BC13
+OUTNAMES[7]=BC14
+OUTNAMES[8]=BC15
+OUTNAMES[9]=BC16
+OUTNAMES[10]=BC18
+OUTNAMES[11]=BC19
+OUTNAME=${OUTNAMES[$SLURM_ARRAY_TASK_ID]}
+
+
+STAR \
+    --runThreadN $SLURM_CPUS_PER_TASK \
+    --genomeDir $GENOME \
+    --readFilesIn $INPUT \
+    --outSAMtype BAM SortedByCoordinate \
+    --outTmpDir=/lscratch/$SLURM_JOB_ID/STARtmp \
+    --outReadsUnmapped Fastx \
+    --outFileNamePrefix STAR2.7.6a/$OUTNAME \
+
+```
+## 2.2 Mapping to Gencode v35
+After mapping to the repeat genome, the unmatched pairs are used as input to map to the gencode v35 genome. For this, we used the STAR indices with 100 bp overhangs that were generated by the NIH HPC core and available to all Biowulf users. 
+
+```{bash Map Genome, eval=FALSE}
+
+#! /bin/bash
+# This script maps UOK262 files to gecode v35 genome with 100 bp overhangs
+export TMPDIR=/lscratch/$SLURM_JOB_ID
+set -o pipefail
+set -e
+
+function fail {
+    echo "$@" >&2
+    exit 1
+    }
+
+module load samtools/1.11         || fail "could not load samtools module"
+module load STAR/2.7.6a          || fail "could not load STAR module"
+
+cd /data/BatistaLab_NGS/UOK_manuscript/m6AIP/262_genome_map || fail "no such directory"
+mkdir -p STAR2.7.6a
+GENOME=/fdb/STAR_indices/2.7.6a/GENCODE/Gencode_human/release_35/genes-100
+
+declare -A INPUTS
+INPUTS[0]=BC2Unmapped.out.mate1
+INPUTS[1]=BC4Unmapped.out.mate1
+INPUTS[2]=BC5Unmapped.out.mate1
+INPUTS[3]=BC6Unmapped.out.mate1
+INPUTS[4]=BC7Unmapped.out.mate1
+INPUTS[5]=BC12Unmapped.out.mate1
+INPUTS[6]=BC13Unmapped.out.mate1
+INPUTS[7]=BC14Unmapped.out.mate1
+INPUTS[8]=BC15Unmapped.out.mate1
+INPUTS[9]=BC16Unmapped.out.mate1
+INPUTS[10]=BC18Unmapped.out.mate1
+INPUTS[11]=BC19Unmapped.out.mate1
+INPUT=${INPUTS[$SLURM_ARRAY_TASK_ID]}
+
+declare -A OUTNAMES
+OUTNAMES[0]=BC2
+OUTNAMES[1]=BC4
+OUTNAMES[2]=BC5
+OUTNAMES[3]=BC6
+OUTNAMES[4]=BC7
+OUTNAMES[5]=BC12
+OUTNAMES[6]=BC13
+OUTNAMES[7]=BC14
+OUTNAMES[8]=BC15
+OUTNAMES[9]=BC16
+OUTNAMES[10]=BC18
+OUTNAMES[11]=BC19
+OUTNAME=${OUTNAMES[$SLURM_ARRAY_TASK_ID]}
+
+
+STAR \
+    --runThreadN $SLURM_CPUS_PER_TASK \
+    --genomeDir $GENOME \
+    --readFilesIn /data/BatistaLab_NGS/UOK_manuscript/m6AIP/262_map_repeats/STAR2.7.6a/$INPUT \
+    --outSAMtype BAM SortedByCoordinate \
+    --outTmpDir=/lscratch/$SLURM_JOB_ID/STARtmp \
+    --outReadsUnmapped Fastx \
+    --outFileNamePrefix STAR2.7.6a/$OUTNAME \
+
+```
+# 3. Calling m6A peaks with MACS
+MACS2 is a program originally designed for CHIP-seq peak data. However, in the past few years, it has become an option for the m6A-community. The aligned sequences were taking from the STAR mapping program upon completion. Other parameters include: gsize (obtained from UCSC genome browser); tsize (obtained from STAR output data for average mapped reads); and extsize (2x size of our RNA fragments)
+
+```{bash MACS2 Peakcalling, eval=FALSE}
+#! /bin/bash
+# macs requires the allocation of lscratch space when running
+module load macs/2.1.2 || exit
+
+declare -A INPUTS
+INPUTS[0]=/BC2Aligned.sortedByCoord.out.bam
+INPUTS[1]=/BC4Aligned.sortedByCoord.out.bam
+INPUTS[2]=/BC5Aligned.sortedByCoord.out.bam
+INPUTS[3]=/BC6Aligned.sortedByCoord.out.bam
+INPUTS[4]=/BC7Aligned.sortedByCoord.out.bam
+INPUTS[5]=/BC12Aligned.sortedByCoord.out.bam
+INPUT=${INPUTS[$SLURM_ARRAY_TASK_ID]}
+
+declare -A TREATMENTS
+TREATMENTS[0]=/BC13Aligned.sortedByCoord.out.bam
+TREATMENTS[1]=/BC14Aligned.sortedByCoord.out.bam
+TREATMENTS[2]=/BC15Aligned.sortedByCoord.out.bam
+TREATMENTS[3]=/BC16Aligned.sortedByCoord.out.bam
+TREATMENTS[4]=/BC18Aligned.sortedByCoord.out.bam
+TREATMENTS[5]=/BC19Aligned.sortedByCoord.out.bam
+TREATMENT=${TREATMENTS[$SLURM_ARRAY_TASK_ID]}
+
+declare -A OUTNAMES
+OUTNAMES[0]=WT1
+OUTNAMES[1]=WT2
+OUTNAMES[2]=WT3
+OUTNAMES[3]=MUT1
+OUTNAMES[4]=MUT2
+OUTNAMES[5]=MUT3
+OUTNAME=${OUTNAMES[$SLURM_ARRAY_TASK_ID]}
+
+macs2 callpeak \
+    -c /data/BatistaLab_NGS/UOK_manuscript/m6AIP/262_genome_map/STAR2.7.6a/$INPUT \
+    -t /data/BatistaLab_NGS/UOK_manuscript/m6AIP/262_genome_map/STAR2.7.6a/$TREATMENT \
+    --name=$OUTNAME \
+    --format=BAM \
+    --gsize=300000000 \ 
+    --tsize=50 \
+    --nomodel \
+    --outdir /data/BatistaLab_NGS/UOK_manuscript/m6AIP/MACS2_peakcalling/  \
+    --keep-dup=all \
+    --extsize=100 \
+    --call-summits \
+    --tempdir /lscratch/$SLURM_JOB_ID
+```
+# 4. Generate 100 bp windows
+MACS2 outputs a peak summit file--a window of 1 bp that denotes the location of the m6A peak. We expanded these windows to 100 bp using R to better account for the size of fragments collected by IP.
+
+```{r Generate 100bp Windows, eval=FALSE}
+
+library(tidyverse)
+
+# Example using summit file from WT1
+# Remember that the "start" coordinates should always be smaller than the "end" coordinates or bedtools will raise an error
+WT1 <- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/WT1_summits.bed", header = FALSE, sep = "\t") %>%
+  dplyr::rename("chr" = V1, "summit_start"=V2, "summit_end"=V3, "name"=V4, "score"=V5) %>%
+  dplyr::mutate("end" = summit_start+50, "start"=summit_start-50) %>%
+  dplyr::select(chr, start, end, name, score) %>%
+  dplyr::filter(grepl('chr', chr))
+
+# First write out all files. Will concatenate the files on biowulf (next code block)
+write.table(WT1, file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/WT1_100bp_windows.bed", row.names = FALSE, col.names = FALSE, sep = "\t", quote = FALSE)
+
+```
+# 5 Peak merging and intersecting
+In this section, we are going to merge the 100 bp windows to create our windows of interest. We will then filter this list to determine which features are present in at least 2 of the 3 samples, and then intersect this with the gencode v35 longest isoform file. 
+
+## 5.1 Bedtools merge
+For each file, merge all of 1 genotype (e.g. merge all WT together; separately, merge all Mutant windows together) and then use bedtools to merge the peak windows
+
+By default, only overlapping or book-ended features are combined into a new feature. However, one can force merge to combine more distant features with the -d option. For example, were one to set -d to 1000, any features that overlap or are within 1000 base pairs of one another will be combined. Negative values enforce the number of b.p. required for overlap. Here we use `-d -25` indicating that peak windows should overlap by at least 25 bp in order to be considered to merge together. 
+```{bash merging peaks, eval=FALSE}
+
+# Combine individual replicates into a single bed file
+cat *large100.bed > WTall.100bp.windows.bed
+ 
+# sort file prior to bedtools intersection
+sort -k1,1 -k2,2n WTall_summits_large.bed > WTall.sorted.100bp.windows.bed
+
+# Note, this merge required some troubleshooting with unhelpful error messages.
+# Older versions of bedtools gave more helpful error messages and may be useful in troubleshooting if similar problems occur.
+# Bedtools: https://bedtools.readthedocs.io/en/latest/content/tools/merge.html
+
+module load bedtools/2.30.0
+bedtools merge -c 4 -d -25 -o count,collapse -i WTall.sorted.100bp.windows.bed > mergedWT_minus25.bed
+bedtools merge -c 4 -d -25 -o count,collapse -i MUTall.sorted.curated.100bp_v2.bed > mergedMUT_minus25.bed
+
+```
+## 5.2 Filtering the peaks
+At this step, we filter for peaks that include at least 2 or 3 features from different samples. It is not enough to just filter based on the number of counts, as things could have 2 peaks from the same sample (e.g. Mut1_peak_1234a and Mut1_peak_1234b). 
+
+```{r filtering peaks, eval=FALSE}
+
+#The first attempt
+WT_peaks <- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/mergedWT_d10.bed", header = FALSE, sep = "\t") %>%
+  dplyr::rename("chr" = V1, "start"=V2, "end"=V3, "counts"=V4, "filenames"=V5) %>%
+  dplyr::filter(counts >= 2) %>%
+  dplyr::select(chr, start, end, filenames, counts)
+write.table(WT_peaks, file="/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/WT_atleast2.bed", quote=FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+Mut_peaks <-read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/mergedMUT_d10.bed", header = FALSE, sep = "\t") %>%
+  dplyr::rename("chr" = V1, "start"=V2, "end"=V3, "counts"=V4, "filenames"=V5) %>%
+  dplyr::filter(counts >= 2) %>%
+  dplyr::select(chr, start, end, filenames, counts)
+write.table(Mut_peaks, file="/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/Mut_atleast2.bed", quote=FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+
+# This method of filtering did not take into account double-counting of samples (eg. Mut_peak_1234a and Mut_peak_1234b)
+# Samples were manually filtered for 2 or 3 counts. 
+# Files were combined into a single bed3 file
+
+# 2021.02.11_WTpeaks_2or3_counts_bed3.bed
+# 2021.02.11_Mutantpeaks_2or3_counts_bed3.bed
+```
+## 5.3 Intersect with Longest Isoform
+The above filtered files were first sorted with bedtools prior to intersection with the longest isoform files. Additionally, I added arbitrary peak numbers (e.g. MutPeak1 so that we can refer to them more easily.) 
+```{bash longest isoform intersect, eval=FALSE}
+
+#This is the best order to perform the intersection
+module load bedtools/2.30.0
+
+# WT File
+bedtools intersect -a WTpeaks_sorted_peakname_2or3count.bed -b /data/BatistaLab_NGS/annotations/v35/longest_isoform/comprehensive/comp_v35.clean.txt.sortedbyname.longestTranscript.exon.bed -wao > WT_2or3count_gencodeV35_intersection_v3.txt
+
+# Mutant File
+bedtools intersect -a MutantPeaks_sorted_peakname_2or3count.bed -b /data/BatistaLab_NGS/annotations/v35/longest_isoform/comprehensive/comp_v35.clean.txt.sortedbyname.longestTranscript.exon.bed -wao > Mut_2or3count_gencodeV35_intersection_v2.txt
+
+```
+
+
