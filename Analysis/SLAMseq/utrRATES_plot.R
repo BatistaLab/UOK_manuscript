@@ -1,3 +1,5 @@
+# Christina Fitzsimmons
+
 library(tidyverse)
 library(ggpubr)
 library(reshape2)
@@ -52,5 +54,3 @@ simple_utr_rate_plot <- ggplot() +
   labs(title = "Mutation rate per 3'UTR base", y= "T.C Conversion Rate", x= "Timepoint (hr)")
 
 simple_utr_rate_plot
-
-
