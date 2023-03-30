@@ -1,0 +1,807 @@
+---
+title: "Analysis of m6A peaks that overlap 2 features on gencode V35 main GTF intersection"
+output: rmdformats::readthedown
+author: "Christina M. Fitzsimmons"
+date: "Last Updated 2021-04-01"
+---
+# Introduction
+The purpose of this notebook is to 1) analyze those m6A peaks that overlap with 2 features to determine if we can rescue them; and 2) to generate a list of Mutant and WT peaks that we can then merge together to create a master list for counting. 
+
+We did this earlier in the month with the longest isoform file. This notebook details the filtering I did for the peaklists that were intersected with the main GTF. General workflow is: 1) Filter those peaks that intersect with the main GTF, 2) filter those peaks that intersect 0, 1, or 2+ times, and then 3) use the fake GTF files to try to resolve them. The FAKE gtf count files were made with the peak list, so in principle, we shouldn't need to redo them. 
+
+As before, for peaks that are counted and appear in our data just one time, we can extract these without much filtering and add them to our final list. Similarly, for peaks that overlap with 3 or more features from the longest isoform file, we will flag these so they can be easily removed from the final list. The question arises with peaks that overlap 2 features. Is there a way that we can salvage these peaks and appropriately assign them to a feature from the longest isoform file? What type of filters (e.g. strand, amount of overlap, etc) can we use to filter these peaks?
+
+
+# 1. Analysis of peaks that overlap with 2 or more features
+Analyzing m6A peaks that overlap with 2 or more features to determine the best way to filter them. 
+
+```{r data import}
+library(tidyverse)
+
+setwd("/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/m6A_IP/")
+
+# Read in the Mutant / gencode v35 intersection file
+Mut_intersect <- read.delim(file = "./03_bedtools_intersect_longest_isoform/2021.03.30_Mutantpeaks-gencodeV35-mainGTF_intersection.txt", header = FALSE, sep = "\t") %>%
+  dplyr::rename("chr"=V1, "start"=V2, "end"=V3, "peakID" = V4, "feature_type" = V7, "score" = V10, "strand"=V11, 'attribute' = V13, 'overlap'=V14) %>%
+  dplyr::filter (feature_type == 'exon') %>%
+  separate(attribute, into = c('geneID', 'transID'), sep = ";") 
+
+#Add counts for the peakIDs
+Mut_intersect_peakcount <- Mut_intersect %>%
+  separate(geneID, into = c(NA, 'gene_ID'), sep = " ") %>%
+  dplyr::select(chr, start, end, peakID, score, strand, gene_ID, overlap) %>%
+  dplyr::distinct(peakID, gene_ID, .keep_all = TRUE) %>%
+  group_by(peakID) %>%
+  add_count(name = 'multimap')
+
+Mut_feature1 <- Mut_intersect_peakcount %>% dplyr::filter(multimap == 1)
+Mut_feature2 <- Mut_intersect_peakcount %>% dplyr::filter(multimap >= 2)
+
+
+# Read in the Wildtype / gencode v35 intersection file
+WT_intersect <- read.delim(file = "./03_bedtools_intersect_longest_isoform/2021.03.30_WTpeaks-gencdoeV335-mainGTF_intersection.txt", header = FALSE, sep = "\t") %>%
+  dplyr::rename("chr"=V1, "start"=V2, "end"=V3, "peakID" = V4, "feature_type" = V7, "score"= V10, "strand"=V11, 'attribute' = V13, 'overlap'=V14) %>%
+  dplyr::filter (feature_type == 'exon') %>%
+  separate(attribute, into = c('geneID', 'transID'), sep = ";") 
+
+#Add counts for the peakIDs
+WT_intersect_peakcount <- WT_intersect %>%
+  separate(geneID, into = c(NA, 'gene_ID'), sep = " ") %>%
+  dplyr::select(chr, start, end, peakID, score, strand, gene_ID, overlap) %>%
+  dplyr::distinct(peakID, gene_ID, .keep_all = TRUE) %>%
+  group_by(peakID) %>%
+  add_count(name = 'multimap')
+
+
+WT_feature1 <- WT_intersect_peakcount %>% dplyr::filter (multimap == 1)
+WT_feature2 <- WT_intersect_peakcount %>% dplyr::filter (multimap >= 2)
+
+```
+# Making histograms of overlap
+We don't seem to have anything with 0 counts overlap. So trying to get a sense of where we might want to cut things off
+
+```{r}
+
+mutantstats <- Mut_intersect_peakcount %>%
+  dplyr::distinct(peakID)
+
+
+Mut_hist <- ggplot(Mut_intersect_peakcount, aes(x=overlap)) +
+  geom_histogram() +
+  theme_bw() +
+  labs(title= "Histogram of Mut peaks--gencodeV35 intersection", subtitle = "All peaks")
+Mut_hist
+
+WT_hist <- ggplot (WT_intersect_peakcount, aes(x = overlap)) +
+  geom_histogram() +
+  theme_bw() +
+  labs(title = "Histogram of WT peaks--gencodeV35 intersection", subtitle = "All peaks")
+WT_hist
+
+
+
+```
+
+
+# 2. Filtering out those peaks that overlap 1 time or 3 or more times and adding them to a new dataframe
+We're starting the dataframe with the mutant, and pulling aside those things which we will not change
+```{r Starting Master List}
+
+# Mutant list of zero things (replaced gene name with 'ZERO')
+# There are no peaks with 0 overlap in this dataframe. 
+# Peaks not present in the mutant intersection dataframe will be intersected with the RepeatMasker in a separate notebook. 
+Mut_score0 <- Mut_intersect_peakcount %>%
+  dplyr::filter(multimap == 1 & overlap == 0) %>%
+  dplyr::mutate('master_score' = 0) %>%
+  dplyr::mutate(gene='ZERO') %>%
+  dplyr::select(chr, start, end, peakID, gene, score, strand, overlap, multimap, master_score)
+
+# Mutant list of intersections with 1 feature
+Mut_score1 <- Mut_intersect_peakcount %>%
+  dplyr::filter(multimap == 1 & overlap >= 1) %>%
+  dplyr::mutate('master_score' = 1) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+# Intersection with 3 or more features
+multimap_3 <- Mut_intersect_peakcount %>%
+  dplyr::filter(multimap >= 3) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap) %>%
+  dplyr::group_by(peakID) %>%
+  dplyr::arrange(peakID, desc(overlap)) %>%
+  dplyr::mutate(rank = row_number()) %>%
+  dplyr::filter(rank == min(rank)) %>% # This picks a single gene for each multi-mapping peak. However, our score flag allows us to go back later if needed. 
+  dplyr::mutate('master_score' = 3)
+
+Mut_score3 <- multimap_3 %>% dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+```
+# 3. Determining which features overlap exactly 2 times
+As expected, the majority of the data intersects with just 1 feature. In this section, we want to try to resolve the data that overlaps with exactly n == 2 features. To do this, we will first isolate features that overlap on opposite (+/-) strand, as well as those that overlap on the same (+/+) or (-/-) strand. 
+```{r}
+# A list of peaks that overlap with exactly 2 features
+Mut_multimap <- Mut_intersect_peakcount %>%
+  dplyr::filter(multimap == 2) %>%
+  add_count(strand, name = "strand_count")
+
+# Generating a list of peaks that overlap on the same strand
+# The syntax is a bit counter-intuitive. Here, count == 2 means that + or - appeared twice, (once for each feature in the pair)
+Mut_same_strand <- Mut_multimap %>%
+  dplyr::filter(strand_count == 2) %>%
+  dplyr::select(peakID) %>%
+  dplyr::distinct()
+
+# Generating a list of peaks that overlap on different strands
+# Again the syntax is a bit counter-intuitive. Here, count == 1 means that for the pair, + appeared 1 time and - appeared 1 time. 
+Mut_diff_strand <- Mut_multimap %>%
+  dplyr::filter(strand_count == 1) %>%
+  dplyr::select(peakID) %>%
+  dplyr::distinct()
+
+# Filtering the n ==2 multimap list for unique peakIDs
+uniqueID <- Mut_multimap %>%
+  dplyr::select(peakID) %>%
+  dplyr::distinct()
+```
+
+# Determining counts using htseq-count
+To determine which strand these features might be on, we generated a fake GTF for all of the peaks. In this fake GTF, all of the peaks were given positive strand information. We then used this fake GTF to count the mapped reads using htseq-count. For the strandedness flag, we counted 3 times, once for each `-s no`, `-s yes`, and `-s reverse`. Based on the information present in the count files, we can hopefully determine which features might be present on which strand. 
+```{r read filter test on BC16}
+
+# Read in the fake count files from our fake htseq counting for the mutant
+BC16_no <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC16.strand-no.fakeGTF.count", header=FALSE) %>% 
+  rename("peakID" = V1, "no_counts"=V2)
+BC16_yes <- read.delim(file= "./05_read_counting/FAKE_gtf_counts/BC16.strand-yes.fakeGTF.count", header=FALSE) %>%
+  rename("peakID" = V1, "yes_counts"=V2)
+BC16_rev <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC16.strand.reverse.fakeGTF.count" , header=FALSE) %>%
+  rename("peakID" = V1, "rev_counts"=V2)
+
+# Arrange the counting frames so that we can join them together
+BC16_no_filter <- BC16_no %>% semi_join(Mut_diff_strand) %>% arrange()
+BC16_yes_filter <- BC16_yes %>% semi_join(Mut_diff_strand) %>% arrange()
+BC16_rev_filter <- BC16_rev %>% semi_join(Mut_diff_strand) %>% arrange()
+
+# joining the data frames together
+# asking how many peaks have mixed counts or how many are all or nothing
+df1 <- inner_join(BC16_no_filter, BC16_yes_filter, by = 'peakID')
+BC16_compare <- inner_join(df1, BC16_rev_filter, by = 'peakID') %>%
+  mutate('yes_frac' = yes_counts/no_counts)%>%
+  mutate("strand16" = case_when(
+    (yes_counts > rev_counts)  ~ 1,
+    (yes_counts < rev_counts)  ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0)) %>%
+  mutate('all_or_nothing' = case_when(
+    (no_counts == yes_counts | no_counts == rev_counts) ~ 'ALL', 
+    TRUE ~ 'MIXED'))
+
+```
+# Visualizing features with mixed counts 
+For the features where `ALL` counts are assigned to a strand, we can confidently move forward with the feature on the matching strand. For peaks where the feature has a mixed population (e.g. some counts on + strand and some counts on - strand) we are going to assign fractions. What fraction of the counts are assigned to the positive strand? The negative strand? What does the histogram look like? Are there some things that we could reasonably assign to 1 strand or the other?
+
+Below, we do this with the `MIXED` strand, and all fractions are calculated relative to the positive strand. 
+```{r distribution of mixed counts}
+
+# An example for a single barcode, sample 16
+BC16_stats <- BC16_compare %>%
+  dplyr::filter(strand16 == 1 | strand16 == -1) %>%
+  dplyr::filter(all_or_nothing == 'MIXED')
+
+# Generating a scatter plot to compare how the counts look like across the replicate
+plot1 <- ggplot(BC16_stats, aes(x=yes_counts, y=rev_counts)) +
+  geom_point() +
+  theme_bw() +
+  xlim(0,600)
+plot1
+
+# Generating a histogram to compare how the counts look like across the replicate
+plot2 <- ggplot(BC16_stats, aes(x=yes_frac)) +
+  geom_histogram() +
+  theme_bw()
+plot2
+
+quantile(BC16_stats$yes_frac) 
+
+```
+After looking at this histogram, I decided that I should combined the histograms of all the mixed peaks, so that I can pick the best filtering values for all, rather than selecting based just on 1 barcode. 
+
+# Reading in BC18 and BC19 data
+```{r read filter on BC18}
+BC18_no <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC18.strand-no.fakeGTF.count", header=FALSE) %>% 
+  rename("peakID" = V1, "no_counts"=V2)
+BC18_yes <- read.delim(file= "./05_read_counting/FAKE_gtf_counts/BC18.strand-yes.fakeGTF.count", header=FALSE) %>%
+  rename("peakID" = V1, "yes_counts"=V2)
+BC18_rev <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC18.strand.reverse.fakeGTF.count" , header=FALSE) %>%
+  rename("peakID" = V1, "rev_counts"=V2)
+
+BC18_no_filter <- BC18_no %>% semi_join(Mut_diff_strand) %>% arrange()
+BC18_yes_filter <- BC18_yes %>% semi_join(Mut_diff_strand) %>% arrange()
+BC18_rev_filter <- BC18_rev %>% semi_join(Mut_diff_strand) %>% arrange()
+
+
+df2 <- inner_join(BC18_no_filter, BC18_yes_filter, by = 'peakID')
+BC18_compare <- inner_join(df2, BC18_rev_filter, by = 'peakID') %>%
+mutate('yes_frac' = yes_counts/no_counts)%>%
+  mutate("strand18" = case_when(
+    (yes_counts > rev_counts)  ~ 1,
+    (yes_counts < rev_counts) ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0)) %>%
+  mutate('all_or_nothing' = case_when(
+    (no_counts == yes_counts | no_counts == rev_counts) ~ 'ALL', 
+    TRUE ~ 'MIXED'))
+```
+```{r read filter on BC19}
+
+BC19_no <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC19.strand-no.fakeGTF.count", header=FALSE) %>% 
+  rename("peakID" = V1, "no_counts"=V2)
+BC19_yes <- read.delim(file= "./05_read_counting/FAKE_gtf_counts/BC19.strand-yes.fakeGTF.count", header=FALSE) %>%
+  rename("peakID" = V1, "yes_counts"=V2)
+BC19_rev <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC19.strand.reverse.fakeGTF.count" , header=FALSE) %>%
+  rename("peakID" = V1, "rev_counts"=V2)
+
+BC19_no_filter <- BC19_no %>% semi_join(Mut_diff_strand) %>% arrange()
+BC19_yes_filter <- BC19_yes %>% semi_join(Mut_diff_strand) %>% arrange()
+BC19_rev_filter <- BC19_rev %>% semi_join(Mut_diff_strand) %>% arrange()
+
+
+df3 <- inner_join(BC19_no_filter, BC19_yes_filter, by = 'peakID')
+BC19_compare <- inner_join(df3, BC19_rev_filter, by = 'peakID') %>%
+mutate('yes_frac' = yes_counts/no_counts)%>%
+  mutate("strand19" = case_when(
+    (yes_counts > rev_counts)  ~ 1,
+    (yes_counts < rev_counts)  ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0)) %>%
+  mutate('all_or_nothing' = case_when(
+    (no_counts == yes_counts | no_counts == rev_counts) ~ 'ALL', 
+    TRUE ~ 'MIXED'))
+```
+# Comparing across the replicates
+```{r comparing yes fraction across replicates}
+
+df4 <- bind_rows(BC16_compare, BC18_compare, BC19_compare) %>% 
+  dplyr::select(peakID, yes_frac, all_or_nothing) %>% 
+  dplyr::filter(all_or_nothing == 'MIXED') %>%
+  na.omit()
+
+# Generating a plot to compare how the counts look like across the replicates
+plot5 <- ggplot(df4, aes(x=yes_frac)) +
+  geom_histogram() +
+  theme_bw() +
+  labs(title = "Fractions of positive strand counts", subtitle = "Mutant peaks")
+plot5
+
+quantile(df4$yes_frac)
+quantile(df4$yes_frac, probs = 0.2)
+quantile(df4$yes_frac, probs = 0.8)
+
+```
+
+# Applying score values to the data
+I had originally settled on 0.871 as the upper bound (assign to positive strand) and 0.099 as the lower bound (assign to negative strand) based on the quantile output. The upper and lower values used to filter were different between WT and Mutant data. Pedro suggested that I select a single cut-off value for both data sets, as this would treat the data the same. After looking at both histograms, I settled on fractions of 0.90 and 0.10 as my cut offs to filter the counts. I'm still unsure if a percentile based method would be better, but we're going for it. 
+```{r applying score values to the data}
+
+#Step 1: Update the strand information to reflect the above histograms
+BC16_compare <- BC16_compare %>%
+  mutate("strand16" = case_when(
+    (yes_counts > rev_counts) & yes_frac > 0.90  ~ 1,
+    (yes_counts < rev_counts) & yes_frac < 0.10 ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0))
+
+BC18_compare <- BC18_compare %>%
+  mutate("strand18" = case_when(
+    (yes_counts > rev_counts) & yes_frac > 0.90  ~ 1,
+    (yes_counts < rev_counts) & yes_frac < 0.10 ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0)) 
+
+
+BC19_compare <- BC19_compare %>%
+  mutate("strand19" = case_when(
+    (yes_counts > rev_counts) & yes_frac > 0.90  ~ 1,
+    (yes_counts < rev_counts) & yes_frac < 0.10 ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0))
+
+
+# Step 2 joining the peak tables together and selecting the strand information
+df5 <- inner_join(BC16_compare, BC18_compare, by="peakID") %>% dplyr::select(peakID, strand16, strand18)
+df_compare <- inner_join(df5, BC19_compare, by="peakID") %>% 
+  dplyr::select (peakID, strand16, strand18, strand19) %>%
+  dplyr::mutate ('strand_sum' = strand16 + strand18 + strand19) %>%
+  dplyr::mutate ('consensus_strand' = case_when(
+    strand_sum == 3 ~ '+',
+    strand_sum == -3 ~ '-',
+    strand_sum == -3000 ~ 'NA', 
+    TRUE ~ 'other'))
+
+# Step 3 creating the filter lists we will use to generate our final Mutant peak table
+list4_plus <- df_compare %>% filter(strand_sum == 3) %>% select(peakID, consensus_strand)
+list4_minus <- df_compare %>% filter(strand_sum == -3) %>% select(peakID, consensus_strand)
+list6 <- df_compare %>% filter(strand_sum == 0) %>% select(peakID)
+list5 <- df_compare %>% filter (strand_sum == -3000) %>% select(peakID)
+list8 <- df_compare %>% 
+  anti_join(list4_minus) %>%
+  anti_join(list4_plus) %>%
+  anti_join(list6) %>%
+  anti_join(list5) %>%
+  select(peakID)
+
+```
+# Adding data to our master list and filtering for distinct peaks
+Now that we've determined the peaks we're keeping for mutant, we are going to create 2 lists:
+
+1) A list of peaks with score == 1 (overlaps exactly 1 feature) and score == 4 (overlaps 2 features but can be resolved). This list will be the list that we move forward with for merging mutant and WT, as well as counting for differential peak expression. 
+
+2) A *Masterlist* of all of the peaks, regardless of score. We have already generated this list in the past, but will make an updated version of this list. We want to retain all of this information about genes we could not resolve just-in-case they appear at a downstream step in our analysis such as Ribosome Profiling or SLAM-seq. A few notes about this *Masterlist* :
+A) For the zero counts and things without strand information, we have changed the gene name to 'Zero' and left the strand information as '.' 
+B) For the peaks that overlap 2 or more features (and that we were unable to resolve) the ENST_ID included in the master list was based on the amount of overlap from the intersection file. (e.g. the feature with the largest overlap was selected.) In the case of a tie (where 2 features overlap the same amount) the first value from the table was selected.  
+
+```{r generating the master peaklist for mutant}
+score2 <- semi_join(Mut_intersect_peakcount, Mut_same_strand) %>% 
+  dplyr::group_by(peakID) %>%
+  dplyr::arrange(peakID, desc(overlap)) %>%
+  dplyr::mutate(rank = row_number()) %>%
+  dplyr::filter(rank == min(rank)) %>%
+  dplyr::mutate('master_score' = 2) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+
+score4plus <- semi_join(Mut_intersect_peakcount, list4_plus, by = c("peakID"="peakID", "strand"="consensus_strand")) %>% 
+  dplyr::mutate ('master_score' = 4) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+score4minus <- semi_join(Mut_intersect_peakcount, list4_minus, by = c("peakID"="peakID", "strand"="consensus_strand")) %>% 
+  dplyr::mutate ('master_score' = 4) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+
+score6 <- semi_join(Mut_intersect_peakcount, list6, by = c("peakID"="peakID")) %>%
+  dplyr::group_by(peakID) %>%
+  dplyr::arrange(peakID, desc(overlap)) %>%
+  dplyr::mutate(rank = row_number()) %>%
+  dplyr::filter(rank == min(rank)) %>%
+  dplyr::mutate('master_score' = 6) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+score5 <- semi_join(Mut_multimap, list5, by = c("peakID"="peakID")) %>%
+  dplyr::group_by(peakID) %>%
+  dplyr::arrange(peakID, desc(overlap)) %>%
+  dplyr::mutate(rank = row_number()) %>%
+  dplyr::filter(rank == min(rank)) %>%
+  dplyr::mutate ('master_score' = 5) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+score8 <- semi_join(Mut_multimap, list8, by = c("peakID"="peakID")) %>% 
+  dplyr::group_by(peakID) %>%
+  dplyr::arrange(peakID, desc(overlap)) %>%
+  dplyr::mutate(rank = row_number()) %>%
+  dplyr::filter(rank == min(rank)) %>%
+  dplyr::mutate ('master_score' = 8) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+# creating the master list of all peaks and all scores
+Mut_masterlist <- bind_rows(score2, score4minus, score4plus, score6, score8, score5, Mut_score0, Mut_score1, Mut_score3) %>%
+  dplyr::mutate("celltype" = 'M') %>%
+  dplyr::add_count(peakID, name='peak_counts') %>%
+  unite(col= 'name2', celltype, peakID, strand, master_score, gene_ID, sep = "_", remove = FALSE) %>% # makes the master name column
+  ungroup()
+
+
+# Keeping these separate in case I make a mistake and want to go back
+Mut_bed6 <- Mut_masterlist %>% dplyr::select(chr, start, end, name2, master_score, strand) 
+write_delim(Mut_bed6, file = "./04_bedtools_merge_mutant-wildtype/2021.04/2021.04.05_Mutant_filtered_masterlist_bedfile.txt", delim = "\t", col_names = TRUE)
+
+# This list is only taking things that overlap a single feature and/or that overlap 2 features but we can resolve them. 
+# Unresolve peaks, zeros, and other items can be found above on the masterlist
+Mut_merge_list <- Mut_masterlist %>% # 18695 items
+  dplyr::filter(master_score ==1 | master_score == 4)
+Mut_merge_bed6 <- Mut_merge_list %>% dplyr::select(chr, start, end, name2, master_score, strand) 
+write_delim(Mut_merge_bed6, file = "./04_bedtools_merge_mutant-wildtype/2021.04/2021.04.05_Mutant_filtered_score1or4_bedfile.txt", delim = "\t", col_names = TRUE)
+
+
+```
+# An analysis of WT peaks
+We're going to repeat the same process with the WT FAKE count files and filtering. As above, we're going to ultimately create 2 lists: a list to move forward with counting, and a *Masterlist* that has all of the important information on it in case this appears in a downstream analysis.  
+
+```{r reading in the WT intersection file}
+# Read in the WT / gencode v35 intersection file
+#WT_intersect <- read.delim(file = "/Users/fitzsimmonscm/Desktop/WT_2or3count_gencodeV35_intersection_v3.txt", header = FALSE, sep = "\t") %>%
+#  dplyr::rename("chr"=V1, "start"=V2, "end"=V3, "peakID" = V4, "gene"=V8,"score" =V9, "strand"=V10, "overlap"=V11)
+
+#Add counts for the peakIDs
+#WT_intersect_peakcount <- WT_intersect %>%
+#  group_by(peakID) %>%
+#  add_count(name = 'multimap')
+
+# Mutant list of zero things (replaced gene name with 'ZERO')
+WT_score0 <- WT_intersect_peakcount %>%
+  dplyr::filter(multimap == 1 & overlap == 0) %>%
+  dplyr::mutate('master_score' = 0) %>%
+  dplyr::mutate(gene='ZERO') %>%
+  dplyr::select(chr, start, end, peakID, gene, score, strand, overlap, multimap, master_score)
+
+# Mutant list of intersections with 1 feature
+WT_score1 <- WT_intersect_peakcount %>%
+  dplyr::filter(multimap == 1 & overlap >= 1) %>%
+  dplyr::mutate('master_score' = 1) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+# Intersection with 3 or more features
+WTmultimap_3 <- WT_intersect_peakcount %>%
+  dplyr::filter(multimap >= 3) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap) %>%
+  dplyr::group_by(peakID) %>%
+  dplyr::arrange(peakID, desc(overlap)) %>%
+  dplyr::mutate(rank = row_number()) %>%
+  dplyr::filter(rank == min(rank)) %>%
+  dplyr::mutate('master_score' = 3)
+
+WT_score3 <- WTmultimap_3 %>% dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+```
+# Generating overlap lists for WT
+Similar to mutant, we can filter peaks based strandedness. We're going to do the same thing here, generating list of peaks that works for WT mixed strands, and then 
+```{r WT overlap lists}
+# A list of peaks that overlap with exactly 2 features
+WT_multimap <- WT_intersect_peakcount %>%
+  dplyr::filter(multimap == 2) %>%
+  add_count(strand, name = "strand_count")
+
+# Generating a list of peaks that overlap on the same strand
+WT_same_strand <- WT_multimap %>%
+  dplyr::filter(strand_count == 2) %>%
+  dplyr::select(peakID) %>%
+  dplyr::distinct()
+
+# Generating a list of peaks that overlap on different strands
+WT_diff_strand <- WT_multimap %>%
+  dplyr::filter(strand_count == 1) %>%
+  dplyr::select(peakID) %>%
+  dplyr::distinct()
+```
+# Reading in WT counts
+Read in our fake count files and use these to determine the strand information for the WT. Fake, only in the sense that the GTF files arbitrarily had all positive strand information, and we can use this, combined with information about how the counts were generated, to assign strand. 
+```{r read in WT counts}
+# Read in the fake count files from our fake htseq counting
+# semi-join with the WT_diff_strand
+# arrange so that we can join together
+BC13_no <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC13.strand-no.fakeGTF.count", header=FALSE) %>% 
+  rename("peakID" = V1, "no_counts"=V2) %>% semi_join(WT_diff_strand) %>% arrange()
+BC13_yes <- read.delim(file= "./05_read_counting/FAKE_gtf_counts/BC13.strand-yes.fakeGTF.count", header=FALSE) %>%
+  rename("peakID" = V1, "yes_counts"=V2) %>% semi_join(WT_diff_strand) %>% arrange()
+BC13_rev <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC13.strand-reverse.fakeGTF.count" , header=FALSE) %>%
+  rename("peakID" = V1, "rev_counts"=V2) %>% semi_join(WT_diff_strand) %>% arrange()
+
+BC14_no <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC14.strand-no.fakeGTF.count", header=FALSE) %>% 
+  rename("peakID" = V1, "no_counts"=V2) %>% semi_join(WT_diff_strand) %>% arrange()
+BC14_yes <- read.delim(file= "./05_read_counting/FAKE_gtf_counts/BC14.strand-yes.fakeGTF.count", header=FALSE) %>%
+  rename("peakID" = V1, "yes_counts"=V2)%>% semi_join(WT_diff_strand) %>% arrange()
+BC14_rev <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC14.strand-reverse.fakeGTF.count" , header=FALSE) %>%
+  rename("peakID" = V1, "rev_counts"=V2)%>% semi_join(WT_diff_strand) %>% arrange()
+
+BC15_no <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC15.strand-no.fakeGTF.count", header=FALSE) %>% 
+  rename("peakID" = V1, "no_counts"=V2)%>% semi_join(WT_diff_strand) %>% arrange()
+BC15_yes <- read.delim(file= "./05_read_counting/FAKE_gtf_counts/BC15.strand-yes.fakeGTF.count", header=FALSE) %>%
+  rename("peakID" = V1, "yes_counts"=V2)%>% semi_join(WT_diff_strand) %>% arrange()
+BC15_rev <- read.delim(file = "./05_read_counting/FAKE_gtf_counts/BC15.strand-reverse.fakeGTF.count" , header=FALSE) %>%
+  rename("peakID" = V1, "rev_counts"=V2)%>% semi_join(WT_diff_strand) %>% arrange()
+
+```
+
+# Generating filters to look at the WT data
+Similar to the Mutant I'm using this initial step to look at a histogram of the data and using this to filter our lists. 
+```{r applying categories to our WT data}
+
+df13 <- inner_join(BC13_no, BC13_yes, by = 'peakID')
+BC13_compare <- inner_join(df13, BC13_rev, by = 'peakID') %>%
+mutate('yes_frac' = yes_counts/no_counts)%>%
+  mutate("strand13" = case_when(
+    (yes_counts > rev_counts)  ~ 1,
+    (yes_counts < rev_counts)  ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0)) %>%
+  mutate('all_or_nothing' = case_when(
+    (no_counts == yes_counts | no_counts == rev_counts) ~ 'ALL', 
+    TRUE ~ 'MIXED'))
+
+df14 <- inner_join(BC14_no, BC14_yes, by = 'peakID')
+BC14_compare <- inner_join(df14, BC14_rev, by = 'peakID') %>%
+mutate('yes_frac' = yes_counts/no_counts)%>%
+  mutate("strand14" = case_when(
+    (yes_counts > rev_counts)  ~ 1,
+    (yes_counts < rev_counts)  ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0)) %>%
+  mutate('all_or_nothing' = case_when(
+    (no_counts == yes_counts | no_counts == rev_counts) ~ 'ALL', 
+    TRUE ~ 'MIXED'))
+
+df15 <- inner_join(BC15_no, BC15_yes, by = 'peakID')
+BC15_compare <- inner_join(df15, BC15_rev, by = 'peakID') %>%
+mutate('yes_frac' = yes_counts/no_counts)%>%
+  mutate("strand15" = case_when(
+    (yes_counts > rev_counts)  ~ 1,
+    (yes_counts < rev_counts)  ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0)) %>%
+  mutate('all_or_nothing' = case_when(
+    (no_counts == yes_counts | no_counts == rev_counts) ~ 'ALL', 
+    TRUE ~ 'MIXED'))
+
+```
+# Comparing across the WT replicates
+What does the histogram for WT look like? We're going to take the same quantile points and use those to filter the mixed counts. 
+
+```{r quantile calculation for WT}
+
+df6 <- bind_rows(BC13_compare, BC14_compare, BC15_compare) %>% 
+  dplyr::select(peakID, yes_frac, all_or_nothing) %>% 
+  dplyr::filter(all_or_nothing == 'MIXED') %>%
+  na.omit()
+
+# Generating a plot to compare how the counts look like across the replicates
+plot6 <- ggplot(df6, aes(x=yes_frac)) +
+  geom_histogram() +
+  theme_bw()
+plot6
+
+quantile(df6$yes_frac)
+
+```
+
+## Applying the new quantile cutoffs to the WT data
+Now that we've looked at the histograms, we can use this to filter our peaks and assign strand information. The cut-offs are slightly different than the Mutant. This is based on the above histograms. Might go back and make it uniform across the two different cell types, but we will see. 
+```{r}
+#Step 1: Update the strand information to reflect the above histograms
+BC13_compare <- BC13_compare %>%
+  mutate("strand13" = case_when(
+    (yes_counts > rev_counts) & yes_frac > 0.90  ~ 1,
+    (yes_counts < rev_counts) & yes_frac < 0.10 ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0))
+
+BC14_compare <- BC14_compare %>%
+  mutate("strand14" = case_when(
+    (yes_counts > rev_counts) & yes_frac > 0.90  ~ 1,
+    (yes_counts < rev_counts) & yes_frac < 0.10 ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0)) 
+
+
+BC15_compare <- BC15_compare %>%
+  mutate("strand15" = case_when(
+    (yes_counts > rev_counts) & yes_frac > 0.90  ~ 1,
+    (yes_counts < rev_counts) & yes_frac < 0.10 ~ -1,
+    no_counts == 0 ~ -1000,
+    TRUE ~ 0))
+
+
+# Step 2 joining the peak tables together and selecting the strand information
+df10 <- inner_join(BC13_compare, BC14_compare, by="peakID") %>% dplyr::select(peakID, strand13, strand14)
+df_compare_WT <- inner_join(df10, BC15_compare, by="peakID") %>% 
+  dplyr::select (peakID, strand13, strand14, strand15) %>%
+  dplyr::mutate ('strand_sum' = strand13 + strand14 + strand15) %>%
+  dplyr::mutate ('consensus_strand' = case_when(
+    strand_sum == 3 ~ '+',
+    strand_sum == -3 ~ '-',
+    strand_sum == -3000 ~ 'NA', 
+    TRUE ~ 'other'))
+
+# Step 3 creating the filter lists we will use to generate our final Mutant peak table
+list4_plusWT <- df_compare_WT %>% filter(strand_sum == 3) %>% select(peakID, consensus_strand)
+list4_minusWT <- df_compare_WT %>% filter(strand_sum == -3) %>% select(peakID, consensus_strand)
+list6_WT <- df_compare_WT %>% filter(strand_sum == 0) %>% select(peakID)
+list5_WT <- df_compare_WT %>% filter (strand_sum == -3000) %>% select(peakID)
+list8_WT <- df_compare_WT %>%
+  anti_join(list4_plusWT) %>%
+  anti_join(list4_minusWT) %>%
+  anti_join(list6_WT) %>%
+  anti_join(list5_WT) %>%
+  select(peakID)
+
+```
+# Generating the WT peak list
+Now that we have the lists we will use for filtering, we will filter the WT peaks and generate the bed6 file that we will use for intersection in the downstream bedtools merge steps. 
+```{r Generating the WT peak list}
+
+score2_WT <- semi_join(WT_intersect_peakcount, WT_same_strand) %>%
+  dplyr::group_by(peakID) %>%
+  dplyr::arrange(peakID, desc(overlap)) %>%
+  dplyr::mutate(rank = row_number()) %>%
+  dplyr::filter(rank == min(rank)) %>%
+  dplyr::mutate('master_score' = 2) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+score4plus_WT <- semi_join(WT_intersect_peakcount, list4_plusWT, by = c("peakID"="peakID", "strand"="consensus_strand")) %>% 
+  dplyr::mutate ('master_score' = 4) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+score4minus_WT <- semi_join(WT_intersect_peakcount, list4_minusWT, by = c("peakID"="peakID", "strand"="consensus_strand")) %>% 
+  dplyr::mutate ('master_score' = 4) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+score6_WT <- semi_join(WT_intersect_peakcount, list6_WT, by = c("peakID"="peakID")) %>% 
+  dplyr::group_by(peakID) %>%
+  dplyr::arrange(peakID, desc(overlap)) %>%
+  dplyr::mutate(rank = row_number()) %>%
+  dplyr::filter(rank == min(rank)) %>%
+  dplyr::mutate ('master_score' = 6) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+score5_WT <- semi_join(WT_intersect_peakcount, list5_WT, by = c("peakID"="peakID")) %>%
+  dplyr::group_by(peakID) %>%
+  dplyr::arrange(peakID, desc(overlap)) %>%
+  dplyr::mutate(rank = row_number()) %>%
+  dplyr::filter(rank == min(rank)) %>%
+  dplyr::mutate ('master_score' = 5) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+score8_WT <- semi_join(WT_intersect_peakcount, list8_WT, by = c("peakID"="peakID")) %>% 
+  dplyr::group_by(peakID) %>%
+  dplyr::arrange(peakID, desc(overlap)) %>%
+  dplyr::mutate(rank = row_number()) %>%
+  dplyr::filter(rank == min(rank)) %>%
+  dplyr::mutate ('master_score' = 8) %>%
+  dplyr::select(chr, start, end, peakID, gene_ID, score, strand, overlap, multimap, master_score)
+
+# Binding everything into the master list
+WT_masterlist <- bind_rows(score2_WT, score4minus_WT, score4plus_WT, score6_WT, score8_WT, score5_WT, WT_score0, WT_score1, WT_score3) %>%
+  dplyr::mutate("celltype"= "WT") %>%
+  dplyr::add_count(peakID, name='peak_counts') %>%
+  unite(col= 'name2', celltype, peakID, strand, master_score, gene_ID, sep = "_", remove = FALSE) %>% # makes the master name column
+  ungroup()
+
+# making WT bed6 file
+WT_bed6 <- WT_masterlist %>% dplyr::select(chr, start, end, name2, master_score, strand) #28824
+write_delim(WT_bed6, file = "./04_bedtools_merge_mutant-wildtype/2021.04/2021.04.05_Wildtype_filtered_masterlist_bedfile.txt", delim = "\t", col_names =TRUE)
+
+# This list is only taking things that overlap a single feature and/or that overlap 2 features but we can resolve them. 
+# Unresolved peaks, zeros, and other items can be found above on the masterlist
+WT_merge_list <- WT_masterlist %>%
+  dplyr::filter(master_score == 1 | master_score == 4) # 18396
+WT_merge_bed6 <- WT_merge_list %>% dplyr::select(chr, start, end, name2, master_score, strand) 
+write_delim(WT_merge_bed6, file = "./04_bedtools_merge_mutant-wildtype/2021.04/2021.04.05_Wildtype_filtered_score1or4_bedfile.txt", delim = "\t", col_names = TRUE)
+
+
+```
+# Joining the files together and writing them out for bedtools merge
+Now that we have our final bed files for both mutant and wildtype peaks, I am going to create a file where I merge them together. This file will then be sorted and merged using the `bedtools merge` function on the biowulf and the code in the below box. 
+```{r bed file write out}
+
+Master_bed <- bind_rows(WT_merge_bed6, Mut_merge_bed6)
+write_delim(Master_bed, "./04_bedtools_merge_mutant-wildtype/2021.04/2021.04.05_WT.Mutant_combined_peaklist_before_bedtools-merge.bed", delim = "\t", col_names = FALSE)
+
+
+```
+
+# Bedtools merge
+The most recent update to the bedtools file is the 2021-03 comment in the box below. The bedtools merge uses the merge_list files (which contain features with score 1 or score 4.) The file was sorted prior to bedtools merge on the biowulf with the `strand` flag enforced and an overlap of minus 25 (`-d 25`)
+```{bash, eval=FALSE}
+# Old Files
+# sort -k1,1 -k2,2n 2021.02.23_WT.Mutant_combined_peaklist.bed > 2021.02.23_WT.Mutant_combined_peaklist.sorted.bed
+
+# bedtools merge -c 4 -d -25 -o count,collapse -i 2021.02.23_WT.Mutant_combined_peaklist.sorted.bed > mergedALL_d25only.txt
+# bedtools merge -c 4 -d -25 -s -o count,collapse -i 2021.02.23_WT.Mutant_combined_peaklist.sorted.bed > mergedALL_d25s.txt
+
+# Updated bed6 files
+# sort -k1,1 -k2,2n 2021.02.24_WT.Mutant_combined_peaklist.bed > 2021.02.24_WT.Mutant_combined_peaklist_sorted.bed
+# bedtools merge -c 4 -d -25 -s -o count,collapse -i 2021.02.24_WT.Mutant_combined_peaklist_sorted.bed > mergeALL_d25s_v2.txt
+
+# Updated bed6 file 2021-03
+sort -k1,1 -k2,2n '2021.04.01_WT.Mutant_combined_peaklist_before_bedtools-merge.bed' > '2021.04.01_WT.Mutant_combined_peaklist_sorted.bed'
+bedtools merge -c 4 -d -25 -s -o count,collapse -i '2021.04.01_WT.Mutant_combined_peaklist_sorted.bed' > '2021.04_mergeWT-Mut_d25s.txt'
+```
+# Merged Mut and WT peaks
+Above, we merged the peaks on the biowulf using `bedtools merge` and the associated flags for strandedness, counting, and collapsing windows. Below, we are starting to analyze that data. Prior to using this peaklist for counting, we want to ask a few questions
+1) What happens to the things with *ZERO* counts
+2) For things with 2 counts, do we end up with 1 WT and 1 Mutant?
+3) Are things matching on the same strand?
+4) Other questions we have yet to determine?! 
+```{r bedtools merge ALL}
+
+ALLmerged_strand <- read.delim(file = "./04_bedtools_merge_mutant-wildtype/2021.04/2021.04.05_mergeWT-Mut_d25s.txt", sep = "\t", header = FALSE) %>%
+  dplyr::rename("chr" = V1, "start" = V2, "end" = V3, "counts" = V4, "names"=V5) %>%
+  mutate('window' = end-start) #25231
+
+#total lines in file
+plot7 <- ggplot(ALLmerged_strand, aes(x=window)) +
+  geom_histogram() +
+  theme_bw() +
+  labs(title="Histogram of Peaks After Merging WT and Mut and enforcing strand", x = "Size of Window ", y= "counts")
+plot7
+
+```
+# Peaks that are counted twice in the bedtools merge
+First we're going to check that none of these peaks that are counted twice have 2 WT counts or 2 mutant counts. 
+For those, we will mark them as *unique* and then move them off the double list. 
+For all other peaks, I'm going to remove things with >= 3 feature overlaps (approx 125 peaks) and then generate a bedfile with overlap 1 or overlap 2 features. 
+```{r merge count two}
+
+#Zero_overlap <- ALL_omits_test %>%
+#  dplyr::filter(bed_score == 'FALSE') %>%
+#  dplyr::mutate('peakID' = row_number())
+
+#Cell_1 <- Zero_overlap %>%
+#  dplyr::select(chr, start, end, cell1, peak1, strand1, peakID) %>%
+#  dplyr::rename(cell=cell1, peak=peak1, strand=strand1)
+
+#Cell_2 <- Zero_overlap %>%
+#  dplyr::select(chr, start, end, cell2, peak2, strand2, peakID) %>%
+#  dplyr::rename(cell=cell2, peak=peak2, strand=strand2)
+
+#Vertical_zeros <- bind_rows(Cell_1, Cell_2) %>%
+#  dplyr::filter(strand != '.') %>%
+#  dplyr::mutate("feature" = 'exon', 
+#                "source" = ".",
+#                "gtf_score" = 0, 
+#                "frame" = ".", 
+#                "name" = 'ZpeakID') %>%
+#  unite(col = "attribute", name, peakID, sep = "", remove = TRUE) %>%
+#  dplyr::select(chr, source, feature, start, end, gtf_score, strand, frame, 'attribute')
+
+```
+ 
+# Generating the stranded bed file and GTF
+In the stranded merge file, first looking at cell type. Does cell type match? In all data above, things with count == 2 after merge come from separate cell types. That is to say, 1 peak in the merge file is from WT, and 1 peak is from Mutant. 
+```{r Stranded GTF file}
+
+ALL_peaks_merged <- ALLmerged_strand %>%
+  dplyr::filter(counts == 2 | counts == 1)%>%
+  separate(col = names, sep = ",", into = c("feature1", "feature2")) %>%
+  separate(col = feature1, sep = "_", into = c("cell1", "peak1", "strand1", "score1", "ENST1")) %>%
+  separate(col = feature2, sep = "_", into = c("cell2", "peak2", "strand2", "score2", "ENST2")) %>%
+  dplyr::mutate('feature' = 'exon', 
+                'source' = ".",
+                'frame' = ".", 
+                'peakID' = 'peakID',
+                'rank'=row_number(),
+                'gtf_score' = case_when(
+                  counts == 2 ~ 2,
+                  counts == 1 ~ 1)) %>%
+  unite(col = "attribute", peakID, rank, sep = "", remove = TRUE)
+
+stats <- ALL_peaks_merged %>%
+  dplyr::filter(counts == 1 & cell1 == 'WT')
+
+
+write_delim(ALL_peaks_merged, "./04_bedtools_merge_mutant-wildtype/2021.04/2021.04.05_mutant-wildtype_unique-shared_peaks.txt", delim = "\t", col_names = TRUE)
+
+
+ALL_peaks_GTF <- ALL_peaks_merged %>%
+dplyr::select(chr, source, feature, start, end, gtf_score, strand1, frame, 'attribute') %>% dplyr::rename(strand= strand1)
+write_delim(ALL_peaks_GTF, "./04_bedtools_merge_mutant-wildtype/2021.04/2021.04.05_mutant-wildtype_merged_gtf_file.txt", delim = "\t", col_names = FALSE)
+
+
+```
+# Converting the GFF file to one with quotes around the attributes column
+This is for the peak file. Will need to repeat it with the zeros-repeat masker intersection...
+```{python, eval=FALSE}
+
+#!/usr/bin/env python3
+
+from pathlib import Path
+
+p = Path('2021.03.08_mutant-wildtype_merged_gtf_file.txt')
+
+def convert_line(line):
+    fields_in = line.strip().split('\t')
+    id_in = fields_in[8]
+
+    id_out = f'gene_id "{id_in}"'
+    fields_out = [*fields_in[:-1], id_out]
+
+    return '\t'.join(fields_out) + '\n'
+
+f_in = open('2021.03.08_mutant-wildtype_merged_gtf_file.txt')
+f_out = open('2021.03.08_m6AIP_merged-mutant-wildtype_customGFF.gff', 'w')
+
+for line_in in f_in:
+    line_out = convert_line(line_in)
+    f_out.write(line_out)
+
+```
+
+
+
+
