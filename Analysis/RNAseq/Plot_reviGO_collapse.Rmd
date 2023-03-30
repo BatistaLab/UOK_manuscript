@@ -1,0 +1,380 @@
+---
+title: "R Notebook"
+output: html_notebook
+author: 'Christina Fitzsimmons'
+date: 'Last updated 2022-05-04'
+---
+# Introduction
+This notebook compares and plots GO-terms from metascape analysis and reviGO collapse.
+
+# Upstream Processing
+RNA-seq data from Gencode v35 library 1 was processed in DEseq2 and these gene names were supplied to metascape. In metascape, we performed custom analysis, and selected all categories to maximize information we learned. The data are grouped in the following way:
+
+1. Set 1 is padj < 0.05 and l2fc > 1 or l2fc < 1 -  these are named:
+    + 2022.05.03_l2fc1_repeat_metascape_upregulated 
+    + 2022.05.03_l2fc1_repeat_metascape_downregulated
+
+2. Set 2 is padj < 0.05 and l2fc > 0 or l2fc < 0 -  these are named:
+    + 2022.05.03_padj005_repeat_metascape_upregulated 
+    + 2022.05.03_padj005_repeat_metascape_downregulated
+
+3. Set 3 is all genes with padj <0.05 – named:
+    + 2022.05.03_padj005_all_metascape
+
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(httr)
+library(stringi)
+
+theme_set(theme_bw())
+
+Set1_down  <- read_csv("2021.02_analysis_gencodeV35/2022.05.03_l2fc1_repeat_metascape_downregulated/Enrichment_GO/_FINAL_GO.csv")
+Set1_up <- read_csv("2021.02_analysis_gencodeV35/2022.05.03_l2fc1_repeat_metascape_upregulated/Enrichment_GO/_FINAL_GO.csv")
+
+
+Set2_down <-read_csv("2021.02_analysis_gencodeV35/2022.05.03_padj005_repeat_metascape_downregulated/Enrichment_GO/_FINAL_GO.csv")
+Set2_up <- read_csv("2021.02_analysis_gencodeV35/2022.05.03_padj005_metascape_upregulated/Enrichment_GO/_FINAL_GO.csv")
+
+Set3_all <- read_csv("2021.02_analysis_gencodeV35/2022.05.03_padj005_all_metascape/Enrichment_GO/_FINAL_GO.csv")
+
+
+
+```
+# Filter the lists for GO-Biological Process terms
+reviGO doesn't work with terms from other categories. 
+
+```{r}
+
+# Filter GO BP terms only
+Set1_down_GOBP <- Set1_down %>%
+  dplyr::filter(Category == "GO Biological Processes")
+
+Set1_up_GOBP <- Set1_up %>%
+  dplyr::filter(Category == "GO Biological Processes")
+
+
+Set2_down_GOBP <- Set2_down %>%
+  dplyr::filter(Category == "GO Biological Processes")
+
+Set2_up_GOBP <- Set2_up %>%
+  dplyr::filter(Category == "GO Biological Processes")
+
+Set3_all_GOBP <- Set3_all %>%
+  dplyr::filter(Category == "GO Biological Processes") 
+
+
+# write out these files for reviGO web interface
+write_csv(Set1_down_GOBP, file = "2021.02_analysis_gencodeV35/2022.05.03_Set1_down_GOBP.csv", col_names = TRUE)
+write_csv(Set1_up_GOBP, file ="2021.02_analysis_gencodeV35/2022.05.03_Set1_up_GOBP.csv", col_names = TRUE )
+
+write_csv(Set2_down_GOBP, file = "2021.02_analysis_gencodeV35/2022.05.03_Set2_down_GOBP.csv", col_names = TRUE)
+write_csv(Set2_up_GOBP, file ="2021.02_analysis_gencodeV35/2022.05.03_Set2_up_GOBP.csv", col_names = TRUE )
+
+write_csv(Set3_all_GOBP, file = "2021.02_analysis_gencodeV35/2022.05.03_Set3_all_GOBP.csv", col_names = TRUE)
+
+```
+# Make plots of the reviGO data
+```{r}
+Set1_down_revigo  <- read_tsv("2021.02_analysis_gencodeV35/2022.05.03_l2fc1_repeat_metascape_downregulated/reviGO_collapse_set1_down/2022.05.03_revigo_collapse_filter07_set1_down.tsv")
+
+set1_down2 <- read_tsv("2021.02_analysis_gencodeV35/2022.05.03_l2fc1_repeat_metascape_downregulated/reviGO_collapse_set1_down/2022.05.04_revigo_collapse_set1_down_filter07.tsv")
+
+Set1_up_revigo <- read_tsv("2021.02_analysis_gencodeV35/2022.05.03_l2fc1_repeat_metascape_upregulated/reviGO/2022.05.03_revigo_collapse_filter07_set1_up.tsv")
+
+
+Set2_down_revigo <-read_tsv("2021.02_analysis_gencodeV35/2022.05.03_padj005_repeat_metascape_downregulated/reviGO/2022.05.03_revigo_collapse_filter07_set2_down.tsv")
+Set2_up_revigo <- read_tsv("2021.02_analysis_gencodeV35/2022.05.03_padj005_metascape_upregulated/reviGO/2022.05.03_revigo_collapse_filter07_set2_up.tsv")
+
+Set3_07_revigo <- read_tsv("2021.02_analysis_gencodeV35/2022.05.03_padj005_all_metascape/reviGO/2022.05.03_revigo_collapse_filter07_Set3_all.tsv")
+Set3_05_revigo <- read_tsv("2021.02_analysis_gencodeV35/2022.05.03_padj005_all_metascape/reviGO/2022.05.03_revigo_collapse_filter05_set3_all.tsv")
+Set3_04_revigo <- read_tsv("2021.02_analysis_gencodeV35/2022.05.03_padj005_all_metascape/reviGO/2022.05.03_revigo_collapse_filter04_set3_all.tsv")
+```
+# plotting top 10 terms for set 3
+```{r}
+
+set3_07_top10 <- Set3_07_revigo %>%
+  dplyr::filter(Eliminated == FALSE) %>%
+  dplyr::arrange(Value) %>% 
+  dplyr::slice(1:10) %>% # select the first 10 GO-terms
+  dplyr::mutate("log10P" = -1* Value) %>%
+  dplyr::mutate(TermID = factor(TermID, TermID)) # This ranks the GO-terms in my order, rather than alphabetically. 
+
+set3_05_top10 <- Set3_05_revigo %>%
+  dplyr::filter(Eliminated == FALSE) %>%
+  dplyr::arrange(Value) %>% 
+  dplyr::slice(1:10) %>% # select the first 10 GO-terms
+  dplyr::mutate("log10P" = -1* Value) %>%
+  dplyr::mutate(TermID = factor(TermID, TermID)) # This ranks the GO-terms in my order, rather than alphabetically. 
+
+set3_04_top10 <- Set3_04_revigo %>%
+  dplyr::filter(Eliminated == FALSE) %>%
+  dplyr::arrange(Value) %>% 
+  dplyr::slice(1:10) %>% # select the first 10 GO-terms
+  dplyr::mutate("log10P" = -1* Value) %>%
+  dplyr::mutate(TermID = factor(TermID, TermID)) # This ranks the GO-terms in my order, rather than alphabetically. 
+
+```
+# Plotting the Set 3 bar plots
+```{r}
+# ReviGO plot
+set3_07_plot <- ggplot(set3_07_top10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways: Genes with padj < 0.05",
+       subtitle = "ReviGO collapse 0.7",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(set3_07_top10$TermID))
+set3_07_plot 
+
+set3_05_plot <- ggplot(set3_05_top10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways: Genes with padj < 0.05",
+       subtitle = "ReviGO collapse 0.5",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(set3_05_top10$TermID))
+set3_05_plot
+
+
+set3_04_plot <- ggplot(set3_04_top10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways: Genes with padj < 0.05",
+       subtitle = "ReviGO collapse 0.4",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(set3_04_top10$TermID))
+set3_04_plot
+
+# Exporting the figures
+pdf("2022.05.04_Set3_padj05_revigo07_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set3_07_plot
+dev.off()
+
+pdf("2022.05.04_Set3_padj05_revigo05_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set3_05_plot
+dev.off()
+
+
+pdf("2022.05.04_Set3_padj05_revigo04_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set3_04_plot
+dev.off()
+
+```
+# Revigo Plots of Set 1 (l2fC > ± 1 and padj <0.05)
+```{r}
+
+Set1_down_10 <- Set1_down_revigo %>%
+  dplyr::filter(Eliminated == FALSE) %>%
+  dplyr::arrange(Value) %>% 
+  dplyr::slice(1:10) %>% # select the first 10 GO-terms
+  dplyr::mutate("log10P" = -1* Value) %>%
+  dplyr::mutate(direction = 'downregulated') %>%
+  dplyr::mutate(TermID = factor(TermID, TermID)) # This ranks the GO-terms in my order, rather than alphabetically. 
+
+Set1_up_10 <- Set1_up_revigo %>%
+  dplyr::filter(Eliminated == FALSE) %>%
+  dplyr::arrange(Value) %>% 
+  dplyr::slice(1:10) %>% # select the first 10 GO-terms
+  dplyr::mutate("log10P" = -1* Value) %>%
+  dplyr::mutate(direction = 'upregulated') %>%
+  dplyr::mutate(TermID = factor(TermID, TermID)) # This ranks the GO-terms in my order, rather than alphabetically. 
+
+set1_down2_10 <- set1_down2 %>%
+  dplyr::filter(Eliminated == FALSE) %>%
+  dplyr::arrange(Value) %>% 
+  dplyr::slice(1:10) %>% # select the first 10 GO-terms
+  dplyr::mutate("log10P" = -1* Value) %>%
+  dplyr::mutate(direction = 'upregulated') %>%
+  dplyr::mutate(TermID = factor(TermID, TermID)) # This ranks the GO-terms in my order, rather than alphabetically. 
+
+
+Set1_combined <- bind_rows(Set1_down_10, Set1_up_10)
+set1_filtered <- dplyr::filter(Set1_combined, log10P > 5)
+
+```
+# plotting set 1 data
+```{r}
+
+# ReviGO plot
+set1_down_plot <- ggplot(Set1_down_10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways",
+       subtitle = "Set1: downregulated",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(Set1_down_10$TermID))
+set1_down_plot
+
+set1_up_plot <- ggplot(Set1_up_10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways",
+       subtitle = "Set1: upregulated",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(Set1_up_10$TermID))
+set1_up_plot
+
+
+set1_all_plot <- ggplot(Set1_combined , aes(x = log10P, y =TermID, fill = direction)) +
+  geom_col(show.legend = FALSE, stat = "TermID") +
+  facet_grid(direction ~ ., scales = "free") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO-BP Up and Downregulated in Mutant cells",
+       subtitle = "Set 1: reviGO collapse 0.7",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev)
+set1_all_plot
+
+
+set1_filter_plot <- ggplot(set1_filtered , aes(x = log10P, y =TermID, fill = direction)) +
+  geom_col()+
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO-BP Up and Downregulated in Mutant cells",
+       subtitle = "Set 1: reviGO collapse 0.7",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev)
+set1_filter_plot
+
+
+```
+# Export the Set1 figures
+```{r}
+# Exporting the figures
+pdf("2022.05.04_Set1_up_l2fc1_padj05_revigo07_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set1_up_plot
+dev.off()
+
+pdf("2022.05.04_Set1_down_l2fc1_padj05_revigo07_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set1_down_plot
+dev.off()
+
+
+pdf("2022.05.04_Set1_combined_l2fc1_padj05_revigo07_facet_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set1_all_plot
+dev.off()
+
+pdf("2022.05.04_Set1_combined_l2fc1_padj05_revigo07_filter_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set1_filter_plot
+dev.off()
+
+```
+# Set 2
+
+```{r}
+Set2_down_10 <- Set2_down_revigo %>%
+  dplyr::filter(Eliminated == FALSE) %>%
+  dplyr::arrange(Value) %>% 
+  dplyr::slice(1:10) %>% # select the first 10 GO-terms
+  dplyr::mutate("log10P" = -1* Value) %>%
+  dplyr::mutate(direction = 'downregulated') %>%
+  dplyr::mutate(TermID = factor(TermID, TermID)) # This ranks the GO-terms in my order, rather than alphabetically. 
+
+Set2_up_10 <- Set2_up_revigo %>%
+  dplyr::filter(Eliminated == FALSE) %>%
+  dplyr::arrange(Value) %>% 
+  dplyr::slice(1:10) %>% # select the first 10 GO-terms
+  dplyr::mutate("log10P" = -1* Value) %>%
+  dplyr::mutate(direction = 'upregulated') %>%
+  dplyr::mutate(TermID = factor(TermID, TermID)) # This ranks the GO-terms in my order, rather than alphabetically. 
+
+
+Set2_combined <- bind_rows(Set2_down_10, Set2_up_10)
+set2_filtered <- dplyr::filter(Set2_combined, log10P > 5)
+```
+# Plotting set 2
+```{r}
+# ReviGO plot
+set2_down_plot <- ggplot(Set2_down_10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways",
+       subtitle = "Set2: downregulated",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(Set2_down_10$TermID))
+set1_down_plot
+
+set2_up_plot <- ggplot(Set2_up_10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways",
+       subtitle = "Set2: upregulated",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(Set2_up_10$TermID))
+set2_up_plot
+
+
+set2_all_plot <- ggplot(Set2_combined , aes(x = log10P, y =TermID, fill = direction)) +
+  geom_col(show.legend = FALSE, stat = "TermID") +
+  facet_grid(direction ~ ., scales = "free") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO-BP Up and Downregulated in Mutant cells",
+       subtitle = "Set 2: reviGO collapse 0.7",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev)
+set2_all_plot
+
+
+set2_filter_plot <- ggplot(set2_filtered , aes(x = log10P, y =TermID, fill = direction)) +
+  geom_col()+
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO-BP Up and Downregulated in Mutant cells",
+       subtitle = "Set 2: reviGO collapse 0.7",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev)
+set2_filter_plot
+```
+# Export the figures
+```{r}
+# Exporting the figures
+pdf("2022.05.04_Set2_up_l2fc1_padj05_revigo07_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set2_up_plot
+dev.off()
+
+pdf("2022.05.04_Set2_down_l2fc1_padj05_revigo07_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set2_down_plot
+dev.off()
+
+
+pdf("2022.05.04_Set2_combined_l2fc1_padj05_revigo07_facet_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set2_all_plot
+dev.off()
+
+pdf("2022.05.04_Set2_combined_l2fc1_padj05_revigo07_filter_barplot.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+set2_filter_plot
+dev.off()
+```
+
