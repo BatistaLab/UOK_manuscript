@@ -1,0 +1,143 @@
+---
+title: "RNAseq Analysis and Plot Generation of Library #1 RNA-seq Data for UOK Manuscript"
+output: rmdformats::readthedown
+author: "Christina Fitzsimmons"
+date: "Last updated 2023-03-29"
+---
+```{r Libraries}
+library(DESeq2)
+library(biomaRt)
+library(tidyverse)
+library(pheatmap)
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+library(gplots)
+library(EnhancedVolcano)
+library(UpSetR)
+library(plyr)
+library(reshape2)
+library(dplyr)
+library(plotly)
+library(gprofiler2)
+
+setwd("/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/RNAseq/")
+
+```
+# 1. Importing the data
+In this library, we elected to only analyze the normoxia data. Although the data was collected, the hypoxia data was not analyzed in this notebook. 
+```{r Data Import}
+
+#DESeq2 analysis from HTseq tables
+setwd("/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/RNAseq/")
+
+# N = normoxia; H = hypoxia; 
+# F = parental; C = control (mutant); W = rescue
+sampleFiles <- list.files(path = "./02_readcounting/2019.06_counts/counts_v35/normoxia/", pattern="*.count")       # load files
+sampleFiles # this checks the order of the files
+
+status <- factor(c(rep("Norm_mut",3), rep("Norm_par",3), rep("Norm_WT",3)))
+sampleTable <- data.frame(sampleName = sampleFiles, fileName = sampleFiles, status=status)
+directory <-"./02_readcounting/2019.06_counts/counts_v35/normoxia/"
+head(sampleTable)
+des <- formula(~status)
+
+ddsHTSeq <- DESeqDataSetFromHTSeqCount(sampleTable = sampleTable, directory = directory, design= des)
+
+```
+# 2. Filtering the data
+```{r Data Filtering and DDS Object}
+setwd("/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/RNAseq/")
+
+nrow(ddsHTSeq)
+keep <- rowSums(counts(ddsHTSeq)) >= 10
+dds <- ddsHTSeq[keep,]
+
+counts_RNA <- (counts(dds, normalize=FALSE))
+write.csv (as.data.frame(counts_RNA), file="./03_differential_expression_analysis/2021.02_gencode_v35_counts.csv")
+nrow(dds)
+head(dds)
+
+dds <- DESeq(dds) #creates the analysis
+
+```
+# 3. Graphs and plots and other exciting things!
+This section will create a a variance stabilizing plot, rplot, general sample heatmap, and PCA plot to look at the distribution of our samples. These plots are in separate blocks of code. The heatmap in this section is only comparing samples to samples, and is different than the heatmap we will make later to compare individual genes across the samples. 
+
+## 3.1 VST and RLD plots
+```{r RLD and VST plots}
+# RLD and VST Plots
+rld <- rlog(dds)
+vsd <- varianceStabilizingTransformation(dds)
+rlogMat <- assay (rld)
+vstMat <- assay (vsd)
+#write.csv (as.data.frame(rlogMat), file="UOK262_gencodeV35_rlogMAt.csv")
+
+```
+## 3.2 Heatmaps
+```{r Heatmaps}
+# Sample comparisons in heatmap with clustering
+hmcol <- colorRampPalette(brewer.pal(9, "RdBu"))(100)
+distsRL <- dist(t(assay(rld)))
+mat <- as.matrix (distsRL) 
+rownames(mat) <- colnames (mat) <- with (colData (dds), paste (status, sep = " : "))
+hc <- hclust (distsRL)
+
+# heatmap
+heatmap.2(mat, Rowv=as.dendrogram(hc), symm=TRUE, trace="none", col = rev (hmcol))
+
+## This is another way to do create one with pheatmap
+sampleDists <- dist(t(assay(vsd)))
+
+sampleDistMatrix <- as.matrix(sampleDists )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Reds")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors,
+         show_rownames=TRUE)
+```
+## 3.3 PCA PLOT
+This is a rather basic PCA plot to look at the samples, but more complex ones can be generated.  
+```{r PCA_PLOT}
+#PCA plot
+plotPCA (rld,intgroup=c("status")) + theme_bw()
+```
+# 4. Differential Expression Analysis
+Finally we are ready to create the DeSeq2 analysis object and determine which genes might be up or down regulated. We have a few more lines of code to ensure that things are organized/grouped the way we want them to be, and then we can run the analysis and generate our results. 
+```{r Expression Analysis of Mutant over WT Normoxia}
+# Here we make the comparison of Normoxia Mut over Normoxia WT
+# However, we could make whatever contrasts we would like
+
+setwd("/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/RNAseq/03_differential_expression_analysis/")
+
+res_MutvWT = results(dds, contrast=c("status","Norm_mut","Norm_WT"))
+summary(res_MutvWT)
+write.csv(as.data.frame(res_MutvWT), file="Normoxia_MutvWT_v35.csv")
+
+df_testMvW <- as.data.frame(res_MutvWT) #23313 with non-zero read count
+df_testMvW <- df_testMvW %>%
+  na.omit() %>% 
+  dplyr::filter(padj< 0.05) %>% # filter for the genes with significant padj
+  rownames_to_column(var = "ENSG") %>%
+  separate(col = ENSG, into = c("ENSG_ID", NA))
+nrow(df_testMvW)
+
+df_testMvW_names <- gconvert(df_testMvW$ENSG, organism = "hsapiens", target = "HGNC", filter_na = F) %>%
+  dplyr::select(input, name) %>%
+  dplyr::rename(ENSG_ID = input, gene_name = name) # change input to ENSG_ID
+
+# Join names dataframe to names df by the common column of ENSG_ID
+df_testMvW_geneID <- inner_join(df_testMvW_names, df_testMvW)
+
+
+#here we remove the NA values from the results to continue with analysis
+res_noNA_MutvWT <- na.omit(res_MutvWT)
+res_MutvWT_sig <- res_noNA_MutvWT [res_noNA_MutvWT$padj<=0.05,]
+nrow(res_MutvWT_sig)
+summary(res_MutvWT_sig)
+dim (res_MutvWT_sig)
+head (res_MutvWT_sig)
+write.csv(as.data.frame(res_MutvWT_sig), file="Normoxia_MutvWT_v35_padj05.csv")
+```
