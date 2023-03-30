@@ -1,0 +1,184 @@
+---
+title: "Metagene analysis of UOK262 m6A-IP peaks"
+output: html_notebook
+author: "Christina Fitzsimmons"
+date: "Last updated 2022-08"
+
+---
+# Introduction
+Generating metagene plots with Mut and WT peaks for the manuscript following [metaplotR](https://github.com/olarerin/metaPlotR) 
+```{r}
+
+setwd ("/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/m6A_IP/")
+library(ggpubr)
+library(tidyverse)
+library(scales)
+library(ggExtra)
+
+```
+# Create peak lists for mutant and WT peaks
+Here, we're going to look at ALL WT peaks and all Mutant peaks. A different file looks at the peaks unique to mutant and unique to WT. This requires generation of bed6 files and running of the perl scripts on the cluster to generate distance files for the metagene plots 
+
+# Generate bed6 files (from m6AIP master table)
+```{r, eval=FALSE}
+# filter data for WT and Mutant
+WTbed6 <- master2 %>%
+  dplyr::filter(unique_ID == "Both" | unique_ID == "Wildtype") %>%
+  dplyr::mutate (score = ".") %>%
+  dplyr::select(chr, start, end, peak_ID, score, strand)
+
+Mutbed6 <- master2 %>%
+  dplyr::filter(unique_ID == "Both" | unique_ID == "Mutant") %>%
+  dplyr::mutate (score = ".") %>%
+  dplyr::select(chr, start, end, peak_ID, score, strand)
+
+# write out data
+write_delim(WTbed6, file = "2022.08.12_WTandboth_m6Apeaks_bed6.txt", delim = "\t", col_names = FALSE)
+write_delim(Mutbed6, file = "2022.08.12_Mutandboth_m6Apeaks_bed6.txt", delim = "\t", col_names = FALSE)
+```
+# metaplotR: sort query bed file
+This is done on the cluster using command line sintax. Can also use bedtools to sort. 
+```{bash, eval=FALSE}
+
+sort -k1,1 -k2,2n 2022.08.12_Mutandboth_m6Apeaks_bed6.txt > Mut.sorted.bed
+sort -k1,1 -k2,2n 2022.08.12_WTandboth_m6Apeaks_bed6.txt > WT.sorted.bed
+
+```
+# metaplotR step 1: make hg38 master annotation and sort the master annotation file.  
+*make_annot_bed.pl* creates a master annotation file (bed format) of every nucleotide in the transcriptome. This file already exists for my hg38 genome. 
+``` /data/BatistaLab_NGS/UOK_manuscript/m6AIP/metagene_analysis/hg38_sorted_metagene_annot.bed```
+
+# metaplotR step 2: make regions of interest file
+*size_of_cds_utrs.pl* creates a file cataloging the transcriptomic coordinates of the start and end sites of the transcript regions (i.e. 5’UTR, CDS and 3’UTR). This file already exists for hg38 genome. 
+
+```/data/BatistaLab_NGS/UOK_manuscript/m6AIP/metagene_analysis/region_sizes.txt ```
+
+
+# metaplotR step 3: annotate the m6A bed file(s)
+*annotate_bed_file.pl* annotates the user supplied BED file. It serves as a wrapper for `Bedtools Intersect` and essentially labels every line in the user supplied BED file with the matching line (i.e. same coordinates) in the master annotation file (hg38_annot.sorted.bed).
+
+Run with:
+```sbatch --array=0,1 --partition=ccr --mail-type=END,FAIL annotate_m6A_array_2022.08.sh```
+
+```{bash, eval=FALSE}
+
+#! /bin/bash
+# The purpose of this file is to annotate the m6A peaklist with metagene regions (TSS / 5UTR / Exon / 3UTR)
+# the m6A bed files are approx 100 bp. Consider re-running using single nt bed files?
+
+set -e
+
+declare -A INPUTS
+INPUTS[0]='/data/BatistaLab_NGS/UOK_manuscript/m6AIP/metagene_analysis/2022.08/Mut.sorted.bed'
+INPUTS[1]='/data/BatistaLab_NGS/UOK_manuscript/m6AIP/metagene_analysis/2022.08/WT.sorted.bed'
+INPUT=${INPUTS[$SLURM_ARRAY_TASK_ID]}
+
+declare -A OUTNAMES
+OUTNAMES[0]='mutant'
+OUTNAMES[1]='wildtype'
+OUTNAME=${OUTNAMES[$SLURM_ARRAY_TASK_ID]}
+
+module load perl
+module load bedtools
+perl /data/BatistaLab_NGS/UOK_manuscript/m6AIP/metagene_analysis/metaPlotR/annotate_bed_file.pl --bed $INPUT --bed2 /data/BatistaLab_NGS/UOK_manuscript/m6AIP/metagene_analysis/hg38_sorted_metagene_annot.bed > annot_m6A_sorted_$OUTNAME.bed
+
+```
+
+# metaplotR step #4
+*rel_and_abs_dist_calc.pl* identifies the region of the transcript in which the user supplied sites fall and converts the transcriptomic coordinates to metagene coordinates
+
+Run with:
+```sbatch --array=0,1 --partition=ccr --mail-type=END,FAIL calculate_distances_m6A_2022.08.sh ```
+```{bash, eval=FALSE}
+#! /bin/bash
+# The purpose of this script is to calculate distances on the m6A metaplot
+
+set -e
+
+declare -A INPUTS
+INPUTS[0]='/data/BatistaLab_NGS/UOK_manuscript/m6AIP/metagene_analysis/2022.08/annot_m6A_sorted_mutant.bed'
+INPUTS[1]='/data/BatistaLab_NGS/UOK_manuscript/m6AIP/metagene_analysis/2022.08/annot_m6A_sorted_wildtype.bed'
+INPUT=${INPUTS[$SLURM_ARRAY_TASK_ID]}
+
+declare -A OUTNAMES
+OUTNAMES[0]='mutant'
+OUTNAMES[1]='wildtype'
+OUTNAME=${OUTNAMES[$SLURM_ARRAY_TASK_ID]}
+
+module load perl
+module load bedtools
+perl /data/BatistaLab_NGS/UOK_manuscript/m6AIP/metagene_analysis/metaPlotR/rel_and_abs_dist_calc.pl --bed $INPUT --regions /data/BatistaLab_NGS/UOK_manuscript/m6AIP/metagene_analysis/region_sizes.txt > $OUTNAME.m6A-distance-measures.txt
+
+```
+# Read in files from metaplotR in R
+The input for this section is the metagene coordinates file outputted from rel_and_abs_dist_calc.pl (step #4 above). 
+
+## Looking at the data from Mut and WT
+```{r}
+setwd ("/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/m6A_IP/")
+
+# read in the data
+mut.dist <- read.delim(file = "./07_metagene_plot/2022.08/mutant.m6A-distance-measures.txt", header = TRUE, sep = "\t")
+wt.dist <- read.delim(file = "./07_metagene_plot/2022.08/wildtype.m6A-distance-measures.txt", header = TRUE, sep = "\t")
+
+
+# Mutant
+# Calculate scaling factors
+utr5.SF_mut <- median(mut.dist$utr5_size, na.rm = T)/median(mut.dist$cds_size, na.rm = T)
+utr3.SF_mut <- median(mut.dist$utr3_size, na.rm = T)/median(mut.dist$cds_size, na.rm = T)
+
+# assign the regions to new dataframes
+utr5.m6a.dist_mut <- mut.dist[mut.dist$rel_location < 1, ]
+cds.m6a.dist_mut <- mut.dist [mut.dist$rel_location < 2 & mut.dist$rel_location >= 1, ]
+utr3.m6a.dist_mut <- mut.dist[mut.dist$rel_location >= 2, ]
+
+utr5.m6a.dist_mut$rel_location <- rescale(utr5.m6a.dist_mut$rel_location, to = c(1-utr5.SF_mut, 1), from = c(0,1))
+utr3.m6a.dist_mut$rel_location <- rescale(utr3.m6a.dist_mut$rel_location, to = c(2, 2+utr3.SF_mut), from = c(2,3))
+
+# merge data frame
+mut.m6a.metagene.coord <- c(utr5.m6a.dist_mut$rel_location, cds.m6a.dist_mut$rel_location, utr3.m6a.dist_mut$rel_location)
+
+
+# Wildtype
+# Calculate scaling factors
+utr5.SF_WT <- median(wt.dist$utr5_size, na.rm = T)/median(wt.dist$cds_size, na.rm = T)
+utr3.SF_WT <- median(wt.dist$utr3_size, na.rm = T)/median(wt.dist$cds_size, na.rm = T)
+
+# assign the regions to new dataframes
+utr5.m6a.dist_wild <- wt.dist[wt.dist$rel_location < 1, ]
+cds.m6a.dist_wild <- wt.dist [wt.dist$rel_location < 2 & wt.dist$rel_location >= 1, ]
+utr3.m6a.dist_wild <- wt.dist[wt.dist$rel_location >= 2, ]
+
+utr5.m6a.dist_wild$rel_location <- rescale(utr5.m6a.dist_wild$rel_location, to = c(1-utr5.SF_WT, 1), from = c(0,1))
+utr3.m6a.dist_wild$rel_location <- rescale(utr3.m6a.dist_wild$rel_location, to = c(2, 2+utr3.SF_WT), from = c(2,3))
+
+# merge data frame
+wild.m6a.metagene.coord <- c(utr5.m6a.dist_wild$rel_location, cds.m6a.dist_wild$rel_location, utr3.m6a.dist_wild$rel_location)
+
+```
+# Generating metagene plots
+```{r}
+combo.metagene.cord2 <- c(mut.m6a.metagene.coord, wild.m6a.metagene.coord)
+mod <- c(rep("mutant", length(mut.m6a.metagene.coord)), 
+         rep("wildtype", length(wild.m6a.metagene.coord)))
+df2 <- data.frame(combo.metagene.cord2, mod)
+
+
+combo_plot2 <- ggplot(df2) +
+  geom_density(aes(x= combo.metagene.cord2, color = mod)) +
+  xlim(0,3) +
+  theme_bw() +
+  labs(title = "Metagene Plot of ")
+  geom_vline(xintercept = 1:2, color = "grey") +
+  theme(legend.position="none")
+combo_plot2
+
+# export the metagene plot
+pdf("2022.08_allMut_allWT_metascape_plot.pdf", 
+   useDingbats=FALSE,
+    width=5, height=4)
+combo_plot2
+dev.off()
+
+
+```
