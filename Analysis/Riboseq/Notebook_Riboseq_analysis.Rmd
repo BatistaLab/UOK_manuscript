@@ -1,0 +1,503 @@
+---
+title: "Analysis of Riboseq data"
+output: html_notebook
+author: 'Christina Fitzsimmons'
+date: 'Last updated 202-06-15'
+---
+
+## 2022-06-15
+## Generate STAR index for MANE transcriptome
+Please use the following publication to cite MANE: Morales, J., Pujar, S., Loveland, J.E. et al. A joint NCBI and EMBL-EBI transcript set for clinical genomics and research. Nature (2022). DOI: 10.1038/s41586-022-04558-8
+
+https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_0.9/README.txt
+```{bash, eval=FALSE}
+# make sure all gtf and fasta files are unzipped or this mode will fail!
+set -o pipefail
+set -e
+
+function fail {
+    echo "$@" >&2
+    exit 1
+    }
+
+module load samtools/1.11         || fail "could not load samtools module"
+module load STAR/2.7.6a          || fail "could not load STAR module"
+
+cd /data/BatistaLab_NGS/annotations/MANE
+mkdir -p repeat_Index_STAR2.7.6a
+
+STAR \
+  --runThreadN $SLURM_CPUS_PER_TASK \
+  --runMode genomeGenerate \
+  --genomeDir repeat_Index_STAR2.7.6a \
+  --genomeFastaFiles /data/BatistaLab_NGS/annotations/MANE/MANE.GRCh38.v0.9.select_refseq_rna.fna \
+  --sjdbGTFfile /data/BatistaLab_NGS/annotations/MANE/MANE.GRCh38.v0.9.select_refseq_genomic.gtf \
+  --sjdbOverhang 50
+
+```
+
+Fatal INPUT FILE error, no valid exon lines in the GTF file: /data/BatistaLab_NGS/annotations/MANE/MANE.GRCh38.v0.9.select_refseq_genomic.gtf
+Solution: check the formatting of the GTF file. One likely cause is the difference in chromosome naming between GTF and FASTA file.
+
+```{bash}
+
+```
+## 2022-06-16
+Problem was genomic gtf with transcriptomic fasta file. Removing the GTF and overhang lines fixes the problem. 
+
+# Mapping to MANE genome
+`sbatch --array=0 --partition=ccr --mem=40g --cpus-per-task=8 --mail-type=END,FAIL --gres=lscratch:50 STAR2.7.6_mapping_MANE.sh`
+```{bash, eval =FALSE}
+#! /bin/bash
+
+export TMPDIR=/lscratch/$SLURM_JOB_ID
+set -o pipefail
+set -e
+
+function fail {
+    echo "$@" >&2
+    exit 1
+    }
+
+module load samtools/1.11         || fail "could not load samtools module"
+module load STAR/2.7.6a         || fail "could not load STAR module"
+
+cd /data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped || fail "no such directory"
+mkdir -p riboseq3_MANEv0.9
+GENOME=/data/BatistaLab_NGS/annotations/MANE/MANE_Index_STAR2.7.6a/
+
+declare -A INPUTS
+INPUTS[0]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC2rUnmapped.out.mate1"
+INPUTS[1]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC4rUnmapped.out.mate1"
+INPUTS[2]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC5rUnmapped.out.mate1"
+INPUTS[3]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC6rUnmapped.out.mate1"
+INPUTS[4]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC7rUnmapped.out.mate1"
+INPUTS[5]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC12rUnmapped.out.mate1"
+INPUTS[6]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC13rUnmapped.out.mate1"
+INPUTS[7]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC14rUnmapped.out.mate1"
+INPUTS[8]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC15rUnmapped.out.mate1"
+INPUTS[9]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC16rUnmapped.out.mate1"
+INPUTS[10]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC18rUnmapped.out.mate1"
+INPUTS[11]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/splitFastq/map_repeats/BC19rUnmapped.out.mate1"
+INPUT=${INPUTS[$SLURM_ARRAY_TASK_ID]}
+
+declare -A OUTNAMES
+OUTNAMES[0]=WTinput1
+OUTNAMES[1]=WTinput2
+OUTNAMES[2]=WTinput3
+OUTNAMES[3]=MUTinput1
+OUTNAMES[4]=MUTinput2
+OUTNAMES[5]=MUTinput3
+OUTNAMES[6]=WTrpf1
+OUTNAMES[7]=WTrpf2
+OUTNAMES[8]=WTrpf3
+OUTNAMES[9]=MUTrpf1
+OUTNAMES[10]=MUTrpf2
+OUTNAMES[11]=MUTrpf3
+OUTNAME=${OUTNAMES[$SLURM_ARRAY_TASK_ID]}
+
+
+STAR \
+    --runThreadN $SLURM_CPUS_PER_TASK \
+    --genomeDir $GENOME \
+    --readFilesIn $INPUT \
+    --outSAMtype BAM SortedByCoordinate \
+    --outWigType wiggle \
+    --outTmpDir=/lscratch/$SLURM_JOB_ID/STARtmp \
+    --outReadsUnmapped Fastx \
+    --outFileNamePrefix riboseq3_MANEv0.9/$OUTNAME \
+    –-outFilterType BySJout \
+    --outFilterMultimapNmax 10 \
+    --outFilterMismatchNmax 999 \
+    --outFilterMismatchNoverLmax 0.04
+
+```
+## Use samtools to index 
+According to plastid, this is the next step. This creates a .bai file for each sorted bam file
+`samtools index WTrpf2Aligned.sortedByCoord.out.bam `
+
+## 1. Generate regions of interest
+```{bash, eval=FALSE}
+
+metagene generate cdsstop --landmark cds_stop --annotation_files /data/BatistaLab_NGS/annotations/MANE/MANE.GRCh38.v0.9.select_ensembl_genomic.gtf --downstream 50 --upstream 100
+
+metagene generate cdsstart --landmark cds_start --annotation_files /data/BatistaLab_NGS/annotations/MANE/MANE.GRCh38.v0.9.select_ensembl_genomic.gtf --downstream 100 --upstream 50
+
+```
+# Creating a new conda environment
+```{bash}
+
+# To use the newly installed conda source an init file. Do this each time you are going to work with your environments.
+source /data/$USER/conda/etc/profile.d/conda.sh
+
+# Activate the base environment (upon which all other environments are built)
+conda activate base
+
+which python # check the conda python is being used instead of the biowulf system python
+conda update conda # update the conda package manager
+conda clean --all --yes # removes all unused packages
+
+```
+### 3.1.2 Creating a plastid-specific environment
+The next step is creating a python environment specifically for Plastid
+```{bash}
+# Generate a new environment using python 3.8
+# Make sure whatever version of python you select for your new environment matches the base conda python--or they won't be able to communicate
+
+conda create -name plastid python=3.8
+
+# Once created, activate the environment to install package dependencies
+conda activate plastid
+
+# install with EITHER pip3
+pip3 install plastid
+
+```
+## 2022-06-22
+Trying to use mamba and pip as per HPC suggestions for installing plastid environment
+
+```{bash}
+
+# activate the plastid conda environment and install mamba
+conda activate plastid
+conda install -c conda-forge mamba
+
+# Install plastid and dependencies
+mamba install -c bioconda plastid
+
+```
+ Custom conda environment made with mamba worked! now onto genome generation and counting
+```{bash}
+# gene position generation:
+cs generate --annotation_files genes.gtf --annotation_format GTF2 cs_generate_genes
+
+# counting-- all BAM files must first be indexed with samtools
+cs count MANE_position_gene.positions --count_files /data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_MANEv0.9/OnePass/BC02Aligned.sortedByCoord.out.bam --fiveprime --countfile_format BAM --min_length 25 --max_length 34 BC2_Mane_counts
+
+```
+ All the count files are empty--ENST vs ENSG counting is the issue. 
+ 1) try this with gencode mapped files
+ 2) guydosh pipeline is specific for MANE
+ 3) make or find ENST gtf file for MANE
+ 
+## 2022-06-23
+```{bash}
+# Counting gencode against gencode gene.positions
+
+
+
+# Counting gencode against MANE gene.positions
+cs count /data/BatistaLab_NGS/Riboseq3/Nextseq_2000/plastid_metagene_counts/MANE/MANE_position_gene.positions --count_files /data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC02Aligned.sortedByCoord.out.bam --fiveprime --countfile_format BAM --min_length 25 --max_length 34 BC02MANEcount
+
+```
+# Are they similar?
+```{r}
+library(tidyverse)
+
+BC02_gencode <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC02count.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, utr5_reads) %>%
+  dplyr::rename(utr5_gencode = utr5_reads)
+
+BC02_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC02MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, utr5_reads) %>%
+  dplyr::rename(utr5_MANE = utr5_reads)
+
+counts <- dplyr::inner_join(BC02_gencode, BC02_MANE, by = c("region"))
+
+scatter1 <- ggplot(counts, aes(x = utr5_gencode, y = utr5_MANE)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  xlim(0,500) +
+  ylim(0,500)
+
+scatter1
+```
+# counting all the files at one time
+Do I need an offset? Only for the metagene? Will ask in lab...
+```{bash}
+#!/bin/bash
+# Christina Fitzsimmons
+set -e
+set -o pipefail
+
+source /data/fitzsimmonscm/conda/etc/profile.d/conda.sh
+
+declare -A INPUTS
+INPUTS[0]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC02Aligned.sortedByCoord.out.bam"
+INPUTS[1]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC04Aligned.sortedByCoord.out.bam"
+INPUTS[2]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC05Aligned.sortedByCoord.out.bam"
+INPUTS[3]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC06Aligned.sortedByCoord.out.bam"
+INPUTS[4]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC07Aligned.sortedByCoord.out.bam"
+INPUTS[5]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC12Aligned.sortedByCoord.out.bam"
+INPUTS[6]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC13Aligned.sortedByCoord.out.bam"
+INPUTS[7]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC14Aligned.sortedByCoord.out.bam"
+INPUTS[8]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC15Aligned.sortedByCoord.out.bam"
+INPUTS[9]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC16Aligned.sortedByCoord.out.bam"
+INPUTS[10]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC18Aligned.sortedByCoord.out.bam"
+INPUTS[11]="/data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC19Aligned.sortedByCoord.out.bam"
+INPUT=${INPUTS[$SLURM_ARRAY_TASK_ID]}
+
+declare -A OUTNAMES
+OUTNAMES[0]=BC02MANEcount
+OUTNAMES[1]=BC04MANEcount
+OUTNAMES[2]=BC05MANEcount
+OUTNAMES[3]=BC06MANEcount
+OUTNAMES[4]=BC07MANEcount
+OUTNAMES[5]=BC12MANEcount
+OUTNAMES[6]=BC13MANEcount
+OUTNAMES[7]=BC14MANEcount
+OUTNAMES[8]=BC15MANEcount
+OUTNAMES[9]=BC16MANEcount
+OUTNAMES[10]=BC18MANEcount
+OUTNAMES[11]=BC19MANEcount
+OUTNAME=${OUTNAMES[$SLURM_ARRAY_TASK_ID]}
+
+conda activate plastid
+
+cs count /data/BatistaLab_NGS/Riboseq3/Nextseq_2000/plastid_metagene_counts/MANE/MANE_position_gene.positions \
+--count_files $INPUT \
+--fiveprime \
+--countfile_format BAM \
+--min_length 25 \
+--max_length 34 \
+$OUTNAME
+```
+
+# trying to plot the metagene
+```{bash}
+source /data/fitzsimmonscm/conda/etc/profile.d/conda.sh
+conda activate plastid
+
+metagene count cdsstart_rois.txt --count_files /data/BatistaLab_NGS/Riboseq3/Nextseq_2000/mapped/riboseq3_gencode/OnePass/BC16Aligned.sortedByCoord.out.bam --threeprime --normalize_over "-50" 100 --use_mean --keep -v --countfile_format BAM BC16_test
+
+```
+This wasn't really working. Will ask Guydosh lab for help running. Likely user error. 
+
+
+# DATA ANALYSIS
+```{r, Load Libraries}
+library(DESeq2)
+library(tidyverse)
+library(circlize)
+library("RColorBrewer")
+library("gplots")
+library(ggrepel)
+library(ggpubr)
+library(gprofiler2)
+library(plotly)
+library(corrplot)
+library(ggcorrplot)
+library(pheatmap)
+```
+# Section 2: Gencode Mapped, MANE gene.positions, plastid counted
+Here, we're going to analyze the plastid counts
+
+```{r}
+# Wildtype Data
+BC02_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC02MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC02 = cds_reads)
+
+BC04_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC04MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC04 = cds_reads)
+
+BC05_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC05MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC05 = cds_reads)
+
+BC06_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC06MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC06 = cds_reads)
+
+BC07_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC07MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC07 = cds_reads)
+
+BC12_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC12MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC12 = cds_reads)
+
+
+# Mutant Data
+BC13_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC13MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC13 = cds_reads)
+
+BC14_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC14MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC14 = cds_reads)
+
+BC15_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC15MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC15 = cds_reads)
+
+BC16_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC16MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC16 = cds_reads)
+
+BC18_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC18MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC18 = cds_reads)
+
+BC19_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC19MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC19 = cds_reads)
+```
+# merging the dataframes together and bringing in the metadata
+```{r}
+#put all data frames into list
+df_list <- list(BC02_MANE, BC04_MANE, BC05_MANE, BC06_MANE, BC07_MANE, BC12_MANE, BC13_MANE, BC14_MANE, BC15_MANE, BC16_MANE, BC18_MANE, BC19_MANE)
+
+#merge all data frames in list
+df_list %>% reduce(full_join, by='region')
+
+#convert back to df format
+df_table <- as.data.frame(df_list) %>%
+  dplyr::select(region, BC02, BC04, BC05, BC06, BC07, BC12, BC13, BC14, BC15, BC16, BC18, BC19) %>%
+  column_to_rownames(var = "region")
+
+# import the metadata
+col_data <- read.delim(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/Analysis/riboseq_metadata.txt", header = TRUE, row.names = 1)
+
+```
+# Section 2: Gencode Mapped, MANE gene.positions, plastid counted
+Here, we're going to analyze the plastid counts
+
+```{r}
+# Wildtype Data
+BC02_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC02MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC02 = cds_reads)
+
+BC04_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC04MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC04 = cds_reads)
+
+BC05_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC05MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC05 = cds_reads)
+
+BC06_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC06MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC06 = cds_reads)
+
+BC07_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC07MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC07 = cds_reads)
+
+BC12_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC12MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC12 = cds_reads)
+
+
+# Mutant Data
+BC13_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC13MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC13 = cds_reads)
+
+BC14_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC14MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC14 = cds_reads)
+
+BC15_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC15MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC15 = cds_reads)
+
+BC16_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC16MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC16 = cds_reads)
+
+BC18_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC18MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC18 = cds_reads)
+
+BC19_MANE <- read.table(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/RAW/plastid_gencode_OnePass/BC19MANEcount.txt" , skip = 18, header = TRUE, sep = "\t") %>%
+  dplyr::select(region, cds_reads) %>%
+  dplyr::rename(BC19 = cds_reads)
+```
+# merging the dataframes together and bringing in the metadata
+```{r}
+# put all data frames into list
+df_list <- list(BC02_MANE, BC04_MANE, BC05_MANE, BC06_MANE, BC07_MANE, BC12_MANE, BC13_MANE, BC14_MANE, BC15_MANE, BC16_MANE, BC18_MANE, BC19_MANE)
+
+# merge all data frames in list
+df_list %>% reduce(full_join, by='region')
+
+# convert back to df format
+df_table <- as.data.frame(df_list) %>%
+  dplyr::select(region, BC02, BC04, BC05, BC06, BC07, BC12, BC13, BC14, BC15, BC16, BC18, BC19) %>%
+  column_to_rownames(var = "region")
+
+# import the metadata
+col_data <- read.delim(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab/FH_SDHB_Project/Rprojects/UOK_manuscript/Ribosome_profiling/Analysis/riboseq_metadata.txt", header = TRUE, row.names = 1)
+
+
+# creating DESeq dds object from treatments and count data
+dds <- DESeqDataSetFromMatrix(countData = countdata,
+                              colData = col_data,
+                              design = ~ celltype + condition + celltype:condition)
+
+# touching up dds object by filtering out any rows with count sums less than 10
+nrow(dds)
+dds <- dds[rowSums(counts(dds)) >10,]
+nrow(dds)
+counts(dds)
+
+```
+# Running the analysis
+```{r}
+
+# Running deseq2 analysis using the multi-factor model
+dds <- DESeq(dds)
+res <- results(dds)
+summary(res)
+
+# what comparisons is Deseq making?
+resultsNames(dds)
+
+```
+# volcano plot of data
+```{r}
+res_stats <- as.data.frame(res) %>%
+  na.omit
+
+
+# make volcano plot
+testvolcano <- res_stats %>%
+  mutate("logDESeqP" = -1*log10(padj)) %>%
+  mutate(
+    "direction" = case_when(
+      log2FoldChange <= -1 & padj < 0.05 ~ "downreg",
+      log2FoldChange >= 1 & padj < 0.05 ~ "upreg",
+      TRUE ~ "no_change")) %>%
+  dplyr::mutate(direction = factor(direction, levels = c("upreg", "downreg", "no_change")))
+
+ribo_scatter <- ggplot(testvolcano, aes(x = log2FoldChange, y = logDESeqP, color=direction)) +
+  geom_point() +
+  theme_bw() +
+  geom_vline(xintercept = -1, linetype="dashed") + geom_vline(xintercept = 1, linetype = "dashed") +
+  geom_hline(yintercept = 1.30, linetype = "dashed") +
+  scale_color_manual(values=c("black", "black", "black")) +
+  #scale_color_manual(values=c("red", "blue", "#999999")) +
+  labs(x = "Log2FoldChange (MUT/WT)", y = "-Log10(P)", title = "Multifactor Analysis of CDS counts", subtitle = "celltype + condition + celltype:condition") 
+ribo_scatter
+
+#gprofiler query of gene names
+annotated_volcano <- testvolcano %>%
+  rownames_to_column("ENSG") %>%
+  separate(ENSG, into = c("ENSG_ID", NA), sep = "[.]")
+
+results_genes = gconvert(annotated_volcano$ENSG_ID, organism = "hsapiens",
+			     target = "ENTREZGENE_ACC", filter_na = FALSE)
+head(results_genes)
+
+
+# add the gene names to the ENSG ID info
+annotated_volcano = merge(annotated_volcano,
+		   results_genes[,c("input", "name")],
+		      by.x = "ENSG_ID", by.y = "input")
+
+# write out information into a CSV file
+write.csv(res_stats, file = "2022.07_MUT_over_WT_RPF_multifactor_differential_expression.csv")
+```
