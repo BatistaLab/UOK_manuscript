@@ -2,21 +2,16 @@
 title: "Bedtools Merge of m6A Peaks"
 output: rmdformats::readthedown
 author: "Christina Fitzsimmons"
-date: "Last updated 2021-02-08"
 ---
-
 # Introduction
-Using this notebook to determine which `bedtools merge` options are the best for our data. 
+Notebook is to help us determine which `bedtools merge` options are the best for our m6A-IP data. 
 ```{r packages}
 library(tidyverse)
 library(purrr)
 ```
 # 1. Analysis of various bedtools merge parameters
-
+Here, I wanted to look at different `merge` parameters to see what looks the best. 
 ```{r Generate 100bp Windows}
-
-library(tidyverse)
-library(purrr)
 
 # Need to play with purrr a bit more. 
 
@@ -69,17 +64,7 @@ write.table(MUT2, file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02
 
 write.table(MUT3, file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/MUT3_100bp_windows.bed", row.names = FALSE, col.names = FALSE, sep = "\t", quote = FALSE)
 
-
-#files = dir(path = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/", pattern = "*.bed")
-#files
-
-#filenames <- substr(files, 1,6)
-#for(i in filenames) {
-#  file.path(files, paste(i, ".bed", sep=""))
-#  assign(i, read.delim(filepath, sep = "\t"))
-#}
-#test <- generate_windows(files)
-
+```
 ## 1.1 Analysis of various overlap integers for the d parameter
 By default, only overlapping or book-ended features are combined into a new feature. However, one can force merge to combine more distant features with the -d option. For example, were one to set -d to 1000, any features that overlap or are within 1000 base pairs of one another will be combined.
 
@@ -145,7 +130,7 @@ Mut_minus10 <- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds
   dplyr::rename("chr" = V1, "start"=V2, "end"=V3, "counts"=V4, "filenames"=V5)
 ```
 ## 2.2 Generating histograms
-
+Here, I am plotting histograms of the different merge windows 
 ```{r plotting histograms}
 
 WTd10_plot <- ggplot(WT_d10, aes(x = counts)) +
@@ -170,9 +155,7 @@ WTd50_plot <- ggplot(WT_d50, aes(x = counts)) +
 WTd50_plot
 
 
-
-# Negative D-value plots
-
+# Plots of the negative D-values
 WTminusd10_plot <- ggplot(WT_minus10, aes(x = counts)) +
   geom_histogram() +
   scale_y_log10() +
@@ -187,14 +170,12 @@ WTminusd25_plot <- ggplot(WT_minus25, aes(x = counts)) +
   labs(title="Bedtools Merge", subtitle = "WT minus 25", x = "Number of overlapping windows", y= "Log10 counts")
 WTminusd25_plot
 ```
-
-## create a set in R? 
-
+# Plots for the all merge data sets
 
 ```{r}
-ALLmerge_minus10 <- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/ALLmerge_minus10_strandV2.txt", header = TRUE, sep = "\t") 
+ALLmerge_minus10 <- read.delim(file = "~/ALLmerge_minus10_strandV2.txt", header = TRUE, sep = "\t") 
 
-ALLmerge_minus25 <-read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/ALLmerge_minus25_strandV2.txt", header = TRUE, sep = "\t") 
+ALLmerge_minus25 <-read.delim(file = "~ALLmerge_minus25_strandV2.txt", header = TRUE, sep = "\t") 
 
 ALLminusd10_plot <- ggplot(ALLmerge_minus10, aes(x = counts)) +
   geom_histogram() +
@@ -218,12 +199,13 @@ ALLmerge_minus10_count1 <- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2
 ALLmerge_minus25_count1 <-read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/ALLmerged_minus25_1count.txt", header = TRUE, sep = "\t") %>%
   dplyr::filter(genotype=='WT')
 ```
-Bedtools intersect Questions
+#Bedtools intersect Questions
+Comparing the original bedtools intersect and the newer intersect `-wao`
 ```{r}
 
-WT_intersect_original <- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/WT_2or3count_v35-longest_intersect.txt", header = FALSE, sep = "\t")
+WT_intersect_original <- read.delim(file = "~/WT_2or3count_v35-longest_intersect.txt", header = FALSE, sep = "\t")
 
-WT_intersect_wao <- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/WT_2or3count_gencodeV35_intersection_v2.txt", header = FALSE, sep = "\t") %>%
+WT_intersect_wao <- read.delim(file = "~/WT_2or3count_gencodeV35_intersection_v2.txt", header = FALSE, sep = "\t") %>%
   dplyr::rename("chr"=V1, "start"=V2, "end"=V3, "gene"=V7, "strand"=V9, "overlap"=V10) %>%
   dplyr::filter(overlap > 0)
 
@@ -234,11 +216,11 @@ plot1 <- ggplot(WT_intersect_wao, aes(x = overlap)) +
 plot1
 
 
-WT_intersect_f25 <- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/WT_intersect_f0.25.txt", header = FALSE, sep = "\t") %>%
+WT_intersect_f25 <- read.delim(file = "~/WT_intersect_f0.25.txt", header = FALSE, sep = "\t") %>%
   dplyr::rename("chr"=V1, "start"=V2, "end"=V3, "gene"=V7, "strand"=V9, "overlap"=V10) %>%
   dplyr::filter(overlap > 0)
 
-WT_intersect_f50<- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/WT_intersect_f0.50.txt", header = FALSE, sep = "\t") %>%
+WT_intersect_f50<- read.delim(file = "~/WT_intersect_f0.50.txt", header = FALSE, sep = "\t") %>%
   dplyr::rename("chr"=V1, "start"=V2, "end"=V3, "gene"=V7, "strand"=V9, "overlap"=V10) %>%
   dplyr::filter(overlap == 0)
 
@@ -258,25 +240,23 @@ plot3
 
 
 ```
-
 ## What do the merged files look like? Size of window?
 
 ```{r}
-
-library(tidyverse)
-
-WT_merged <- read.delim(file = "/Users/fitzsimmonscm/Documents/Projects_and_Data/Batista_Lab_FH_SDHB_Project/Rprojects/UOK_manuscript/m6A_IP/MACS2_output_beds_2021.02/bedtools_merge/WTpeaks_sorted_peakname_2or3count.bed", header = FALSE, sep = "\t") %>%
+WT_merged <- read.delim(file = "~/WTpeaks_sorted_peakname_2or3count.bed", header = FALSE, sep = "\t") %>%
   dplyr::rename (chromosome=V1, start=V2, end=V3, peakname=V4) %>%
   dplyr::mutate ("window" = end-start)
 
-MUT_merged <- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/bedtools_intersect_longest_isoform/MutantPeaks_sorted_peakname_2or3count.bed", header = FALSE, sep = "\t") %>%
+MUT_merged <- read.delim(file = "~/MutantPeaks_sorted_peakname_2or3count.bed", header = FALSE, sep = "\t") %>%
   dplyr::rename (chromosome=V1, start=V2, end=V3, peakname=V4) %>%
   dplyr::mutate ("window" = end-start)
 
+# What are the quantiles for the different merges
 quantile(WT_merged$window)
 quantile(MUT_merged$window)
 
 
+# Plotting the different windows after we merge
 plot4 <- ggplot(WT_merged, aes(x = window)) +
   geom_histogram() +
   theme_bw() +
@@ -290,16 +270,13 @@ plot5 <- ggplot(MUT_merged, aes(x = window)) +
   labs(title="Histogram of Mutant Peaks After Merging", x = "Size of Window ", y= "counts")
 plot5
 
-
 ```
-
 # 4. Analysis of the histograms of different intersections
-We want to ask the question of how much are things overlapping? 
-What kind of numbers are we getting? 
+We want to ask the question of how much are things overlapping? What kind of numbers are we getting? 
 
 ```{r}
 
-WT_intersect_wao <- read.delim(file = "/Users/fitzsimmonscm/Desktop//WT_2or3count_gencodeV35_intersection_v2.txt", header = FALSE, sep = "\t") %>%
+WT_intersect_wao <- read.delim(file = "~/WT_2or3count_gencodeV35_intersection_v2.txt", header = FALSE, sep = "\t") %>%
   dplyr::rename("chr"=V1, "start"=V2, "end"=V3, "gene"=V7, "score" = V8, "strand"=V9, "overlap"=V10) %>%
   dplyr::filter(overlap == 0)
 
@@ -317,7 +294,7 @@ WT_intersect_counts <- WT_intersect_wao %>%
 WT_same <- WT_intersect_counts %>%
   dplyr::filter (strand_count == 1)
 
-# write.csv(WT_intersect_counts, "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/2021.02.17_WTintersection_multimap2.csv", row.names = FALSE)
+# write.csv(WT_intersect_counts, "~/2021.02.17_WTintersection_multimap2.csv", row.names = FALSE)
   
 
 plot6 <- ggplot(WT_same, aes(x = overlap)) +
@@ -325,13 +302,11 @@ plot6 <- ggplot(WT_same, aes(x = overlap)) +
   theme_bw() +
   labs(title="Histogram of WT peaks that intersect 2 features on opposite strands ", x = "Size of overlap window (bp) ", y= "counts")
 plot6
-
-
-
+```
 ### Intersection and plots of the mutant dataframe
 
-
-Mutant_intersect_wao <- read.delim(file = "/Users/fitzsimmonscm/Desktop/MACS2_output_beds_2021.02/Mut_2or3count_gencodeV35_intersection_v2.txt", header = FALSE, sep = "\t") %>%
+```{r}
+Mutant_intersect_wao <- read.delim(file = "~/Mut_2or3count_gencodeV35_intersection_v2.txt", header = FALSE, sep = "\t") %>%
   dplyr::rename("chr"=V1, "start"=V2, "end"=V3, "peakID" = V4, "gene"=V8,"score" =V9, "strand"=V10, "overlap"=V11)
 
 #df2 <- Mutant_intersect_wao %>%
@@ -349,8 +324,8 @@ Mutant_intersect_counts <- Mutant_intersect_wao %>%
 Mutant_same <- Mutant_intersect_counts %>%
   dplyr::filter (strand_count == 1)
 
-
-# write.csv(Mutant_intersect_counts, "/Users/fitzsimmonscm/Desktop/2021.02.21_Mutant_intersect_overlap2.csv", row.names = FALSE)
+# write out the file
+write.csv(Mutant_intersect_counts, "~/2021.02.21_Mutant_intersect_overlap2.csv", row.names = FALSE)
 
 
 plot7  <- ggplot(Mutant_same, aes(x = overlap)) +
@@ -364,23 +339,17 @@ quantile(Mutant_intersect_counts$overlap)
 ```
 
 # Generating peak files for counting
-Pedro and I have come up with an idea for how best to filter the peak files. At the moment, we're going to retain everything, but mark the peaks in the score column so that we know which peak comes from which type of filter (eg matches 1 feature, matches 2 features same strand, etc). I need to repeat the WT counting with the peaknames in place of the chr /start /stop filtering I have right now. 
+I have come up with an idea for how best to filter the peak files. At the moment, we're going to retain everything, but mark the peaks in the score column so that we know which peak comes from which type of filter (eg matches 1 feature, matches 2 features same strand, etc). I need to repeat the WT counting with the peaknames in place of the chr /start /stop filtering I have right now. 
 
 
 ```{r Generating the mutant peaklist}
 
-library(tidyverse)
-
-
-Mutant_intersect_wao <- read.delim(file = "/Users/fitzsimmonscm/Desktop/Mut_2or3count_gencodeV35_intersection_v2.txt", header = FALSE, sep = "\t") %>% dplyr::rename("chr"=V1, "start"=V2, "end"=V3, "peakID" = V4, "gene"=V8,"score" =V9, "strand"=V10, "overlap"=V11)
+Mutant_intersect_wao <- read.delim(file = "~/Mut_2or3count_gencodeV35_intersection_v2.txt", header = FALSE, sep = "\t") %>% dplyr::rename("chr"=V1, "start"=V2, "end"=V3, "peakID" = V4, "gene"=V8,"score" =V9, "strand"=V10, "overlap"=V11)
 
 # Generating a new peak list 
 Mutant_peaklist <- Mutant_intersect_wao %>%
   dplyr::group_by(peakID) %>%
   add_count(name = 'peakcounts')
-
-
-
 
 ```
 
