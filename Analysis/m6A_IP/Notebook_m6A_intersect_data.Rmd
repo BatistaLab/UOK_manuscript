@@ -1,0 +1,827 @@
+---
+title: "Analysis and Visualization of m6A-IP / SLAM-seq / Ribo-seq intersection"
+output: html_notebook
+author: 'Christina Fitzsimmons'
+---
+# Notebook Introduction and Purpose
+The purpose of this notebook is to perform analysis of the SLAM-seq and Riboseq libraries. We want to ask several questions about how the half-life looks broadly, as well as differences between WT and Mut data sets. In addition, this notebook will intersect the SLAM-seq and Riboseq data with the m6A-IP data set, to ask questions about how modification with m6A impacts these. 
+```{r, libraries}
+# Importing the libraries
+setwd ("~/UOK_manuscript/m6A_IP/")
+
+# Importing libraries for use with this analysis
+library(tidyverse)
+library(matrixTests)
+library(matrixStats)
+library(gprofiler2)
+library(plotly)
+library(ggpubr)
+library(ggExtra)
+library(RColorBrewer)
+library(viridis)
+library(readr)
+library(readxl)
+
+#setting the global theme for plotting in the document. 
+theme_set(theme_bw())
+```
+#1 Read in the m6A data 
+Here, we import the m6A-IP data, as well as the peak conversion table (converting between ENSG_ID, gene_name, and ENST_ID), as well as the RRACH motif table that was generated. Several intersections are performed to combine this data into 1 table. 
+```{r, m6a data}
+
+#Ratio table includes a calculated Mut/WT half-life enrichment ratio. This data would be better formatted for KS plots. 
+master_table <- read.delim(file = "./2021.04.21_m6A_master_peaklist.txt", header = TRUE, sep = "\t")
+
+# RRACH annotation table
+motif_table <- read.delim(file = "~/RRACH_peaks.bed", header = FALSE, sep = "\t") %>%
+  dplyr::rename(chr = V1, start = V2, end = V3, peak_ID = V4, motif = V5, strand = V6) %>%
+  dplyr::select(peak_ID, motif)
+
+# intersect the master peak table with the motif table to make a new table
+master2 <- left_join(master_table, motif_table, by = c("peak_ID"))
+
+#Importing non-target list
+# this has been filtered for things with >= 5 counts in all gene-level replicates
+gene_level <- read.csv(file = "~/gene_level_counts.csv", header = TRUE) %>%
+  dplyr::rename(gene_name = X) %>%
+  dplyr::select(gene_name) %>%
+  separate(col = gene_name, into = c('ENSG_ID', NA), sep = "[.]")
+
+# Importing the peak conversion table (convert peakID to geneID)
+peak_conversion_table <- read.delim(file = "~/mutant-wildtype_unique-shared_peaks.txt", header = TRUE, sep = "\t")%>%
+  dplyr::mutate(unique_ID = case_when(
+    cell1 == 'WT' & gtf_score == 1 ~"Wildtype",
+    cell1 == 'M' & gtf_score ==1 ~ "Mutant",
+    gtf_score == 2 ~ "Both")) %>%
+  dplyr::select(chr, start, end, ENST1, strand1, attribute, unique_ID) %>%
+  dplyr::rename(peak_ID = attribute, strand = strand1, ENSGID = ENST1) %>%
+  separate(col = ENSGID, into = c("ENSG_ID", NA), sep = "[.]") 
+
+## RNAseq data
+RNA_L1 <- read.delim(file = "~/Normoxia_MutvWT_v35.csv", sep = ",", header = TRUE) %>%
+  separate(col = X, into = c("ENSG_ID", NA), sep = "[.]") %>%
+  dplyr::select(ENSG_ID, log2FoldChange, padj) %>%
+  dplyr::rename(l2fc = log2FoldChange)
+
+# write_out
+write_delim(master2, file = "~/master_peaklist_2.txt", delim = "\t", col_names = TRUE)
+
+```
+# Reading in the slamseq data
+Here, we import the SLAM-seq half-life data and perform a bit of basic filtering. This data is generated in both long and wide format. 
+```{r, slamseq data }
+
+# read in new half-life data, filtered for replicates
+# In the calculation notebook, this data was filtered to include genes with replicates > 1. 
+# An additional filter was performed to remove genes with half-life equal to 0.035. 
+# This filter for 0.035 removes rows with mostly 0/1 very low counts 
+
+SLAM_fit1_new_wide <- read_csv("~/SLAMseq_halflife_model_fit1.csv") %>%
+  dplyr::select(gene_name, variant, deviance, replicate_counts, half1) %>%
+  dplyr::rename(reps = replicate_counts) %>%
+  dplyr::ungroup() %>%
+  dplyr::distinct() %>%
+  pivot_wider(names_from = variant, values_from = c("half1", "deviance", "reps"), names_sep = "_") %>%
+  na.omit() 
+
+SLAM_fit1_new_tall <- read_csv("~/SLAMseq_halflife_model_fit1.csv") %>%
+  dplyr::select(gene_name, variant, half1) %>%
+  dplyr::ungroup() %>%
+  dplyr::distinct() %>%
+  dplyr::mutate(log_half = log2(half1))
+
+
+# Same data tables in wide and tall format, but I filter to include only those data with 3 replicates 
+SLAM_fit3_new_tall <- read_csv("~/SLAMseq_halflife_model_fit1.csv") %>%
+  dplyr::filter(replicate_counts == 3)%>%
+  dplyr::select(gene_name, variant, half1) %>%
+  dplyr::ungroup() %>%
+  dplyr::distinct() %>%
+  dplyr::mutate(log_half = log2(half1))
+
+
+SLAM_fit3_new_wide <- read_csv("~/SLAMseq_halflife_model_fit1.csv") %>%
+  dplyr::filter(replicate_counts == 3)%>%
+  dplyr::select(gene_name, variant, half1) %>%
+  dplyr::ungroup() %>%
+  dplyr::distinct() %>%
+  pivot_wider(names_from = variant, values_from = c("half1"), names_sep = "_") %>%
+  na.omit() 
+```
+# Comparing filter vs no filter on replicates
+In this section, I compare a dataframe where fit1 shows no filtering for number of replicates to a dataframe where I pre-filtered the data to include only those genes with > 1 replicate.  Many of these genes with such high half-lives have only a single replicate and the conversion rate does not drop very rapidly, leading to the high values we are observing. Our hypothesis is that this data will look much neater, and will reduce some of the very high data points we are observing (e.g. half-life of 300 hrs) if I pre-filter to things with 2 or 3 replicates. 
+```{r}
+# calculate summary statistics of WT and Mutant for the no filter and filter data frames
+summary(SLAM_fit1_new_wide$half1_Mutant)
+summary(SLAM_fit1_new_wide$half1_Wildtype)
+
+#summary(SLAM_fit1_old_wide$Mutant)
+#summary(SLAM_fit1_old_wide$Wildtype)
+
+quantile(SLAM_fit1_new_tall$half1, probs = 0.90)
+quantile(SLAM_fit1_new_tall$half1, probs=0.10)
+
+# How does the model look if we filter with 3 counts?
+summary(SLAM_fit3_new_wide$Mutant)
+summary(SLAM_fit3_new_wide$Wildtype)
+
+```
+# ECDF and violin plot of filter 2/3 data split by Mutant and WT
+```{r, ecdf plots new}
+
+#ECDF of total half-life in log2 format
+ECDF1_log_genes <- ggplot(SLAM_fit1_new_tall, aes(x = log_half)) +
+  stat_ecdf(geom = "smooth") +
+  labs(title = "ECDF of filtered half-life", y = "Cummulative Distribution", x = "Log2 half-life")
+ECDF1_log_genes
+
+#ECDF new, filtered data in linear format
+ECDF1_linear_half <- ggplot(SLAM_fit1_new_tall, aes(x = half1)) +
+  stat_ecdf(aes(color = variant), geom = "smooth") +
+  xlim(0,25) +
+  labs(title = "ECDF of filtered half-life", y = "Cummulative Distribution", x = "Half-life (hr)")
+ECDF1_linear_half
+
+
+#ECDF new, filtered data in log format, split by mutant and wildtype
+ECDF1_loghalf_mut_WT <- ggplot(SLAM_fit1_new_tall, aes(x = log_half)) +
+  stat_ecdf(aes(color = variant), geom = "smooth") +
+  labs(title = "ECDF comparing WT and Mutant half-life", subtitle = "Filtered Data",
+         y = "Cummulative Distribution", x = "Log2 half-life")
+ECDF1_loghalf_mut_WT
+
+# KS Test to look at the half-live differences between mutant and wt data. Here, I use the horizontal dataframe and ask for two-sided results
+ks.test(SLAM_fit1_new_wide$half1_Mutant, SLAM_fit1_new_wide$half1_Wildtype, alternative = c("two.sided"))
+
+# Boxplot new, filtered data
+box1_new <- ggplot(SLAM_fit1_new_tall, aes(x = variant, y = log_half)) +
+  geom_violin(aes(fill= variant)) +
+  labs(title = 'Violin plot of Mutant vs Wildtype Halflife', y = "log2 half-life") +
+  stat_compare_means(ref.group = "Wildtype", method = "t.test", aes(label=..p.adj..))
+box1_new
+
+# marginal histogram plot of WT vs Mutant
+WTvMut_scatter1 <- ggplot(SLAM_fit1_new_wide, aes(x = half1_Wildtype, y=half1_Mutant)) +
+  geom_point(size = 0.4) +
+  xlim(0,25)+
+  ylim(0,25)+
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed")
+WTvMut_scatter1
+
+# density plot with ggmarginal
+p1 <- ggExtra::ggMarginal(WTvMut_scatter1, type ="density", 
+                          xparams = list(fill = c("#66C2A5")), yparams = list(fill=c("#FC8D62")), binwidth = 0.25)
+p1
+
+```
+# Plots for filter3 data
+Now we'll make the same type of plots, but for the data that is filtered such that it includes all 3 replicates
+```{r}
+#ECDF new, filtered data in log format, split by mutant and wildtype
+ECDF3_loghalf_mut_WT <- ggplot(SLAM_fit3_new_tall, aes(x = log_half)) +
+  stat_ecdf(aes(color = variant), geom = "smooth") +
+  labs(title = "ECDF comparing WT and Mutant half-life", subtitle = "Filtered Data",
+         y = "Cummulative Distribution", x = "Log2 half-life")
+ECDF3_loghalf_mut_WT
+
+#ECDF new, filtered data in log format, split by mutant and wildtype
+ECDF3_loghalf <- ggplot(SLAM_fit3_new_tall, aes(x = log_half)) +
+  stat_ecdf(geom = "smooth") +
+  labs(title = "ECDF comparing WT and Mutant half-life", subtitle = "Filtered Data",
+         y = "Cummulative Distribution", x = "Log2 half-life")
+ECDF3_loghalf
+
+
+# KS Test to look at the half-live differences between mutant and wt data. Here, I use the horizontal dataframe and ask for two-sided results
+ks.test(SLAM_fit3_new_wide$Mutant, SLAM_fit3_new_wide$Wildtype, alternative = c("two.sided"))
+
+# marginal histogram plot of WT vs Mutant
+WTvMut_scatter3 <- ggplot(SLAM_fit3_new_wide, aes(x =Wildtype, y=Mutant)) +
+  geom_point(size = 0.4) +
+  xlim(0,25)+
+  ylim(0,25)+
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed")
+WTvMut_scatter3
+
+p3 <- ggExtra::ggMarginal(WTvMut_scatter3, type ="density", 
+                          xparams = list(fill = c("#66C2A5")), yparams = list(fill=c("#FC8D62")), binwidth = 0.25)
+p3
+
+# Boxplot new, filtered data
+box_new3 <- ggplot(SLAM_fit3_new_tall, aes(x = variant, y = log_half)) +
+  geom_violin(aes(fill= variant)) +
+  labs(title = 'Violin plot of Mutant vs Wildtype Halflife', y = "log2 half-life") +
+  stat_compare_means(ref.group = "Wildtype", method = "t.test", aes(label=..p.adj..))
+box_new3
+```
+Based on these plots and summary statistics, it looks like the filtered data performs better, and that we actually observe a difference between mutant and wildtype data for the same gene! This is encouraging, and supports our theory that higher levels of m6A modifications in the mutant are leading to shorter overall half-lives. We also observe these shorter half-lives when we compare the ECDF plots by KS-test and the violin plots with t-test. 
+
+The differences observed in the filter2/3 vs the fitler3 are minimal. In both the KS test and the t-test, the results are significant, however, the overall number of genes is lower in the fitler3 data (this is expected) and the overall half-life values are smaller range. I will continue looking at both filter2 and filter 3 for overall GO-terms and also m6A-IP intersection analysis, to see what types of values are similar or different.  
+
+# ECDF of total half-life filter3 to export for illustrator
+Here, we will export the cumulative ECDF plot in log2 format, the ECDF (in log2 format) split by WT and Mutant, and the violin plot (in log2 format) split by WT and Mutant. 
+```{r, exporting slamseq plots for illustrator}
+
+# export the cumulative ECDF plot in log2 format
+pdf("SLAMseq_filtered_data_cumulative_ECDF_log2_scale_filter3.pdf", 
+   useDingbats=FALSE,
+    width=5, height=4)
+ECDF3_loghalf
+dev.off()
+
+# export the wildtype vs mutant comparative ECDF plot in log2 format
+pdf("SLAMseq_filtered_data_comparative_ECDF_WT_vs_Mutant_log2_scale_filter3.pdf", 
+   useDingbats=FALSE,
+    width=5, height=4)
+ECDF3_loghalf_mut_WT
+dev.off()
+
+# export the wildtype vs mutant comparative violin plot in log2 format
+pdf("SLAMseq_filtered_data_comparative_violin_plot_WT_vs_Mutant_log2_scale_filter3.pdf", 
+   useDingbats=FALSE,
+    width=5, height=4)
+box_new3
+dev.off()
+
+# export the wildtype vs mutant comparative scatterplot with marginal density 
+pdf("SLAMseq_filtered_data_scatter_plot_WT_vs_Mutant_marginal_density_filter3.pdf", 
+   useDingbats=FALSE,
+    width=5, height=4)
+p3
+dev.off()
+
+```
+# Calculating the most and least stable genes
+In this section, we are calculating the most and least stable genes for the cumulative half-life, for the mutant and wildtype data sets individually, as well as those genes that show the greatest ratio change. These tables will be exported for metascape analysis and GO-term assignment, as well as for reviGO collapse (at strictness level 0.7). Following GO assignment and collapse, these terms will be plotted in a bar-plot format as we have done previously for RNA-seq and m6A-IP. 
+
+### Calculating most and least stable genes for the filter3 data
+
+```{r}
+# Cumulative distribution most and least stable--how to account for double genes from mutant and WT?
+summary(SLAM_fit3_new_tall$half1)
+quantile(SLAM_fit3_new_tall$half1, probs = 0.90)
+quantile(SLAM_fit3_new_tall$half1, probs=0.10)
+
+# WT most and least stable
+summary(SLAM_fit3_new_wide$Wildtype)
+quantile(SLAM_fit3_new_wide$Wildtype, probs = 0.90)
+quantile(SLAM_fit3_new_wide$Wildtype, probs=0.10)
+
+# Mutant most and least stable
+summary(SLAM_fit3_new_wide$Mutant)
+quantile(SLAM_fit3_new_wide$Mutant, probs = 0.90)
+quantile(SLAM_fit3_new_wide$Mutant, probs=0.10)
+```
+## Writing out the filtered tables for GO-term analysis of just the half-life
+Here, I'm using the wide format, and keeping the lists of mutant and WT separate. I wasn't sure the best way to get around double-counting genes in the long format, and this work around avoids that. I will take the top 10% and bottom 10% into metascape and then reviGO to make plots. 
+```{r, GO term lists}
+
+# Filter 3 list
+write.csv(SLAM_fit3_new_wide, "SLAMseq_filter3only_halflife_mutant_WT.csv", row.names = FALSE)
+
+ks.test(SLAM_fit3_new_wide$Mutant, SLAM_fit3_new_wide$Wildtype, alternative = c("two.sided"))
+
+```
+# Analysis of half-life GO-terms for metascape and reviGO
+Here, we are analyzing the annotated metascape terms that were collapsed by reviGO at a level of 0.7. This level gave a warning of "too many terms" but this is what we've been using for the m6A-IP and the the RNA-seq terms, so in order to be consistent, we will stick with this level. 
+```{r}
+
+reviGO_import_clean <- function(filepath) {
+  read.delim(file = filepath, header = TRUE, sep = "\t") %>%
+    dplyr::filter(Eliminated == 'False') %>%
+    dplyr::arrange(Value) %>% 
+    dplyr::slice(1:10) %>% # select the first 10 GO-terms
+    dplyr::mutate("log10P" = -1* Value) %>%
+    dplyr::mutate(TermID = factor(TermID, TermID))
+}
+
+# Import and clean 
+revigo_Mut3_top10 <- reviGO_import_clean("~/reviGO_collapse_filter07_Mutant3_top10.tsv")
+  
+revigo_Mut3_bot10 <- reviGO_import_clean("~/reviGO_collapse_filter07_Mutant3_bottom10.tsv")
+
+revigo_WT3_top10<- reviGO_import_clean("~/reviGO_collapse_filter07_WT3_top10.tsv")
+
+revigo_WT3_bot10 <- reviGO_import_clean("~/reviGO_collapse_filter07_WT3_bottom10.tsv")
+
+```
+# plotting the reviGO data--bottom 10
+Here we are plotting the bottom 10 percent of the data
+```{r}
+
+# Downregulated Mutant Terms
+Mut3_down_plot <- ggplot(revigo_Mut3_bot10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways",
+       subtitle = "Mutant3: Bottom 10 percent",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(revigo_Mut3_bot10$TermID))
+Mut3_down_plot
+
+# Downregulated WT Terms
+WT3_down_plot <- ggplot(revigo_WT3_bot10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways",
+       subtitle = "WT3: Bottom 10 percent",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(revigo_WT3_bot10$TermID))
+WT3_down_plot
+
+```
+# plotting the reviGO data--top 10
+Here we are plotting the top 10 percent of the data
+```{r}
+# Upregulated Mutant Terms
+Mut3_up_plot <- ggplot(revigo_Mut3_top10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways",
+       subtitle = "Mutant3: Top 10 percent",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(revigo_Mut3_top10$TermID))
+Mut3_up_plot
+
+# Upregulated WT Terms
+WT3_up_plot <- ggplot(revigo_WT3_top10 , aes(x = log10P, y =TermID)) +
+  geom_col(fill = "gray80") +
+  geom_text(aes(label=Name), 
+            hjust = 0, x=0, size = 3) +
+  labs(title = "GO Biological Pathways",
+       subtitle = "WT3: Top 10 percent",
+       x = "-Log10P", y = "") +
+  scale_y_discrete(limits = rev(revigo_WT3_top10$TermID))
+WT3_up_plot
+```
+# Writing new master tables
+Intersecting the half-life data with the m6A-IP data to look at the different properties of genes/transcripts with m6A targets vs non-targets
+```{r}
+
+master_SLAM3 <- dplyr::left_join(master2, SLAM_fit3_new_wide, by = c("ENSG_ID" = "gene_name")) %>%
+  dplyr::mutate(target = "m6A-target")
+
+```
+# Reading in the multi-factor riboseq data
+```{r}
+Riboseq <- read.csv(file = "/MUT_over_WT_RPF_multifactor_differential_expression.csv")%>%
+  separate(X, into = c("ENSG_ID", NA), sep = "[.]") %>%
+  dplyr::select(ENSG_ID, log2FoldChange, padj) %>%
+  dplyr::rename (riboseq_l2fc= log2FoldChange, riboseq_padj = padj)
+
+Riboseq_WT <- read.csv(file = "/riboseq_WT_rpf_over_input.csv") %>%
+  dplyr::select(X, log2FoldChange, padj) %>%
+  dplyr::rename (l2fc_WT= log2FoldChange, padj_WT = padj) %>%
+  separate(X, into = c("ENSG_ID", NA), sep = "[.]")
+
+Riboseq_Mut <- read.csv(file = "/riboseq_MUT_rpf_over_input.csv") %>%
+  dplyr::select(X, log2FoldChange, padj) %>%
+  dplyr::rename (l2fc_MUT= log2FoldChange, padj_MUT = padj) %>%
+  separate(X, into = c("ENSG_ID", NA), sep = "[.]")
+
+master_SLAM_ribo <- dplyr::full_join(master_SLAM3, Riboseq)
+
+```
+# Comparing m6A targets with non-targets
+What things are not targets of m6A? What things ARE targets of m6A but not significant? What targets are significant? 
+```{r}
+
+# merging nontarget list with m6A master peak list (list generated prior to filtering--all possible m6A targets)
+nontarget5 <- anti_join(gene_level, peak_conversion_table, by= c("ENSG_ID")) %>% dplyr::distinct()
+nrow(nontarget5) # 4465 genes
+
+# These are the m6A peaks that pass the gene-level input filter
+# Is this extra filter step needed? Might be overkill.
+global_m6A <- semi_join(peak_conversion_table, gene_level) %>% dplyr::distinct (ENSG_ID)
+nrow(global_m6A) #7861 genes
+
+# These are the m6A peaks that pass the gene level filter and are deferentially expressed
+
+analysis_SLAM3<- semi_join(master_SLAM3, global_m6A) %>%
+  dplyr::mutate(target = "target")
+
+SLAMseq_upreg_targets <- analysis_SLAM3 %>%
+  dplyr::filter(direction == 'diff_l2fc > 1.5' & peak_location != 'first_100')
+
+SLAMseq_nochange_targets <- analysis_SLAM3 %>%
+  dplyr::filter(direction == 'no_change' & peak_location != 'first_100')
+
+SLAMseq_downreg_targets <- analysis_SLAM3 %>%
+  dplyr::filter(direction == 'diff_l2fc < -1.5' & peak_location != 'first_100')
+
+```
+#Joining with SLAM seq data
+We're going to join this in two ways--with the Jaffrey data and also with the aomisc data. The two sets should be similar, but provide slightly different perspective. This may be updated in the future as we continue working with the half-life data. 
+```{r}
+# Generating non-target data
+nontarget_SLAM3 <- semi_join(SLAM_fit3_new_wide, nontarget5, by = c("gene_name" = "ENSG_ID")) %>%
+  dplyr::mutate(target = "non-target", direction = "non-target") %>%
+  dplyr::rename(ENSG_ID = gene_name)
+nrow(nontarget_SLAM3 ) # 1082 genes
+
+# merging all the dataframes together
+CMF_half3 <- bind_rows(analysis_SLAM3, nontarget_SLAM3) %>%
+  dplyr::rename(half1_Mutant = Mutant, half1_Wildtype = Wildtype) %>%
+  dplyr::select(ENSG_ID, gene_name, peak_ID, chr, start, end, strand, unique_ID, gene_l2fc, gene_padj, 
+                peak_l2fc, diff_l2fc, DEseq_padj, QNB_padj, logDEseqP, logQNBP, padj_sig, direction, 
+                peak_location, motif, target, half1_Mutant, half1_Wildtype) %>%
+  dplyr::mutate(log2_half_ratio = log2(half1_Mutant/half1_Wildtype))
+
+
+
+# merging upreg dataframe
+CMF_half3_upreg <- bind_rows(SLAMseq_upreg_targets, nontarget_SLAM3) %>%
+  dplyr::rename(half1_Mutant = Mutant, half1_Wildtype = Wildtype) %>%
+  dplyr::select(ENSG_ID, gene_name, peak_ID, chr, start, end, strand, unique_ID, gene_l2fc, gene_padj, 
+                peak_l2fc, diff_l2fc, DEseq_padj, QNB_padj, logDEseqP, logQNBP, padj_sig, direction, 
+                peak_location, motif, target, half1_Mutant, half1_Wildtype) %>%
+  dplyr::mutate(log2_half_ratio = log2(half1_Mutant/half1_Wildtype))
+
+# merging downregulated dataframe
+CMF_half3_downreg <- bind_rows(SLAMseq_downreg_targets, nontarget_SLAM3) %>%
+  dplyr::rename(half1_Mutant = Mutant, half1_Wildtype = Wildtype) %>%
+  dplyr::select(ENSG_ID, gene_name, peak_ID, chr, start, end, strand, unique_ID, gene_l2fc, gene_padj, 
+                peak_l2fc, diff_l2fc, DEseq_padj, QNB_padj, logDEseqP, logQNBP, padj_sig, direction, 
+                peak_location, motif, target, half1_Mutant, half1_Wildtype) %>%
+  dplyr::mutate(log2_half_ratio = log2(half1_Mutant/half1_Wildtype))
+
+
+# merging no change dataframe
+CMF_half3_nochange <- bind_rows(SLAMseq_nochange_targets, nontarget_SLAM3) %>%
+  dplyr::rename(half1_Mutant = Mutant, half1_Wildtype = Wildtype) %>%
+  dplyr::select(ENSG_ID, gene_name, peak_ID, chr, start, end, strand, unique_ID, gene_l2fc, gene_padj, 
+                peak_l2fc, diff_l2fc, DEseq_padj, QNB_padj, logDEseqP, logQNBP, padj_sig, direction, 
+                peak_location, motif, target, half1_Mutant, half1_Wildtype) %>%
+  dplyr::mutate(log2_half_ratio = log2(half1_Mutant/half1_Wildtype))
+
+
+
+# Long version for plotting the data 
+CMF_half_long3 <- CMF_half3 %>%
+dplyr::select(ENSG_ID, target, half1_Mutant, half1_Wildtype) %>%
+  pivot_longer(names_to = c("halflife", "cell"), names_sep = "_", cols = c("half1_Wildtype", "half1_Mutant"), values_to = c("half")) %>%
+  dplyr::select(ENSG_ID, target, cell, half) %>%
+  na.omit() %>%
+  dplyr::mutate(log2_half = log2(half))%>%
+  dplyr::mutate("cell-target" = case_when(
+    cell =="Wildtype" & target == "non-target" ~ "WT-nontarget", 
+    cell =="Wildtype" & target == "target" ~ "WT-m6Atarget", 
+    cell == "Mutant" & target == "non-target" ~ "Mut-nontarget", 
+    cell == "Mutant" & target == "target" ~ "Mut-m6Atarget")) %>%
+  dplyr::mutate(`cell-target` = factor(`cell-target`, levels = c("WT-nontarget","WT-m6Atarget", "Mut-nontarget", "Mut-m6Atarget"))) %>%
+  dplyr::mutate(target = factor(target, levels = c("target", "non-target")))
+
+
+# upregulated table
+CMF_half_upreg_long <- CMF_half3_upreg %>%
+dplyr::select(ENSG_ID, target, half1_Mutant, half1_Wildtype) %>%
+  pivot_longer(names_to = c("halflife", "cell"), names_sep = "_", cols = c("half1_Wildtype", "half1_Mutant"), values_to = c("half")) %>%
+  dplyr::select(ENSG_ID, target, cell, half) %>%
+  na.omit() %>%
+  dplyr::mutate(log2_half = log2(half))%>%
+  dplyr::mutate("cell-target" = case_when(
+    cell =="Wildtype" & target == "non-target" ~ "WT-nontarget", 
+    cell =="Wildtype" & target == "target" ~ "WT-m6Atarget", 
+    cell == "Mutant" & target == "non-target" ~ "Mut-nontarget", 
+    cell == "Mutant" & target == "target" ~ "Mut-m6Atarget")) %>%
+  dplyr::mutate(`cell-target` = factor(`cell-target`, levels = c("WT-nontarget", "Mut-nontarget", "WT-m6Atarget", "Mut-m6Atarget"))) %>%
+  dplyr::mutate(target = factor(target, levels = c("target", "non-target")))
+
+
+# no change table
+CMF_half_nochange_long <- CMF_half3_nochange %>%
+dplyr::select(ENSG_ID, target, half1_Mutant, half1_Wildtype) %>%
+  pivot_longer(names_to = c("halflife", "cell"), names_sep = "_", cols = c("half1_Wildtype", "half1_Mutant"), values_to = c("half")) %>%
+  dplyr::select(ENSG_ID, target, cell, half) %>%
+  na.omit() %>%
+  dplyr::mutate(log2_half = log2(half))%>%
+  dplyr::mutate("cell-target" = case_when(
+    cell =="Wildtype" & target == "non-target" ~ "WT-nontarget", 
+    cell =="Wildtype" & target == "target" ~ "WT-m6Atarget", 
+    cell == "Mutant" & target == "non-target" ~ "Mut-nontarget", 
+    cell == "Mutant" & target == "target" ~ "Mut-m6Atarget")) %>%
+  dplyr::mutate(`cell-target` = factor(`cell-target`, levels = c("WT-nontarget", "Mut-nontarget", "WT-m6Atarget", "Mut-m6Atarget"))) %>%
+  dplyr::mutate(target = factor(target, levels = c("target", "non-target")))
+
+
+# downregulated table
+CMF_half_downreg_long <- CMF_half3_downreg %>%
+dplyr::select(ENSG_ID, target, half1_Mutant, half1_Wildtype) %>%
+  pivot_longer(names_to = c("halflife", "cell"), names_sep = "_", cols = c("half1_Wildtype", "half1_Mutant"), values_to = c("half")) %>%
+  dplyr::select(ENSG_ID, target, cell, half) %>%
+  na.omit() %>%
+  dplyr::mutate(log2_half = log2(half))%>%
+  dplyr::mutate("cell-target" = case_when(
+    cell =="Wildtype" & target == "non-target" ~ "WT-nontarget", 
+    cell =="Wildtype" & target == "target" ~ "WT-m6Atarget", 
+    cell == "Mutant" & target == "non-target" ~ "Mut-nontarget", 
+    cell == "Mutant" & target == "target" ~ "Mut-m6Atarget")) %>%
+  dplyr::mutate(`cell-target` = factor(`cell-target`, levels = c("WT-nontarget", "WT-m6Atarget", "Mut-nontarget",  "Mut-m6Atarget"))) %>%
+  dplyr::mutate(target = factor(target, levels = c("target", "non-target")))
+
+
+
+# making wide versions of the tables
+CMF_half_wide3 <- CMF_half_long3 %>%
+  dplyr::select(ENSG_ID, target, cell, half) %>%
+  pivot_wider(values_from = half, names_from = c("cell", "target"), names_sep = "_")
+
+```
+# Plotting the half-lives of targets and non-targets
+```{r}
+#ECDF plot of Direction
+ECDF_target3 <- ggplot(CMF_half_long3, aes(x = half)) +
+  stat_ecdf(aes(color= `cell`, linetype = `target`), geom = "smooth")+
+  labs(x = "Half-life", y = "Cummulative Distribution", title = "ECDF of Filter3 half-life", subtitle = "Target vs Non-target by celltype") +
+  xlim(0,24) 
+  theme(legend.position="none")
+ECDF_target3
+
+ECDF_target_upreg <- ggplot(CMF_half_upreg_long, aes(x = half)) +
+  stat_ecdf(aes(color= `cell`, linetype = `target`), geom = "smooth")+
+  labs(x = "Half-life", y = "Cummulative Distribution", title = "ECDF of half-life filtered by upreg m6A-IP", subtitle = "Target vs Non-target by celltype") +
+  xlim(0,24)
+ECDF_target_upreg
+
+# KS test of half-lives from Filter3
+WT_target3 <- dplyr::filter(CMF_half_long3, `cell-target` == "WT-m6Atarget")
+WT_non3 <- dplyr::filter(CMF_half_long3, `cell-target` == "WT-nontarget")
+Mut_target3 <- dplyr::filter(CMF_half_long3, `cell-target` == "Mut-m6Atarget")
+Mut_non3 <- dplyr::filter(CMF_half_long3, `cell-target` == "Mut-nontarget")
+
+
+ks.test(WT_target3$half, WT_non3$half, alternative = c("two.sided"))
+ks.test(Mut_target3$half, Mut_non3$half, alternative = c("two.sided"))
+ks.test(WT_target3$half, Mut_target3$half, alternative = c("two.sided"))
+ks.test(WT_non3$half, Mut_non3$half, alternative = c("two.sided"))
+
+
+# export the ECDF filter3 plot
+pdf("SLAMseq_m6A_ECDF_plot_solid.pdf", 
+   useDingbats=FALSE,
+    width=5, height=4)
+ECDF_target3
+dev.off()
+
+```
+# Boxplots and things to compare
+Just a different version of the plots 
+```{r}
+
+box_target3 <- ggplot(CMF_half_long3, aes(x = `cell-target`, y = log2_half)) +
+  geom_violin(aes(fill= `cell-target`))+
+  labs(title = "Violin plot of Filter 3 half-life") +
+  ylim(0,6) +
+  stat_compare_means(ref.group = "WT-nontarget", method = "t.test", aes(label=..p.adj..))
+box_target3
+
+# export the wildtype vs mutant violin plot
+pdf("2022.10.05_SLAMseq_m6A_violin_plotfilter3.pdf", 
+   useDingbats=FALSE,
+    width=5, height=4)
+box_target3
+dev.off()
+
+
+#Upregulated
+box_targetup <- ggplot(CMF_half_upreg_long, aes(x = `cell-target`, y = log2_half)) +
+  geom_violin(aes(fill= `cell-target`))+
+  labs(title = "Violin plot of Filter 3 half-life", subtitle = "m6A-IP upregulated") +
+  ylim(0,8) +
+  stat_compare_means(ref.group = "WT-nontarget", method = "t.test", aes(label=..p.adj..))
+box_targetup
+
+#No Change
+box_target_nochange <- ggplot(CMF_half_nochange_long, aes(x = `cell-target`, y = log2_half)) +
+  geom_violin(aes(fill= `cell-target`))+
+  labs(title = "Violin plot of Filter 3 half-life", subtitle = "m6A-IP no change") +
+  ylim(0,8) +
+  stat_compare_means(ref.group = "WT-nontarget", method = "t.test", aes(label=..p.adj..))
+box_target_nochange
+
+#Downregulated
+box_targetdown <- ggplot(CMF_half_downreg_long, aes(x = `cell-target`, y = log2_half)) +
+  geom_violin(aes(fill= `cell-target`))+
+  labs(title = "Violin plot of Filter 3 half-life", subtitle = "m6A-IP downregulated") +
+  ylim(0,8) +
+  stat_compare_means(ref.group = "WT-nontarget", method = "t.test", aes(label=..p.adj..))
+box_targetdown
+
+```
+# Intersecting riboseq data with m6A-IP data
+Now that we've looked at halflife, we can start looking at the riboseq data to see how it might compare between mutant and WT and targets and non-targets. 
+```{r}
+
+CMF_ribo3 <- merge(CMF_half3, Riboseq)
+  
+CMF_ribo3_long <- CMF_ribo3 %>%
+  dplyr::select(ENSG_ID, target, riboseq_l2fc, diff_l2fc) 
+
+
+# Riboseq upregulated
+CMF_ribo_upreg <- merge(Riboseq, CMF_half3_upreg) %>%
+  dplyr::select(ENSG_ID, target, riboseq_l2fc, diff_l2fc)
+
+# Riboseq no change
+CMF_ribo_nochange <- merge(Riboseq, CMF_half3_nochange) %>%
+  dplyr::select(ENSG_ID, target, riboseq_l2fc, diff_l2fc)
+
+# Riboseq downregulated
+CMF_ribo_downreg <- merge(Riboseq, CMF_half3_downreg) %>%
+  dplyr::select(ENSG_ID, target, riboseq_l2fc, diff_l2fc)
+
+
+
+#ECDF plot of target vs non-target
+ECDF_ribo3 <- ggplot(CMF_ribo3_long, aes(x = riboseq_l2fc)) +
+  stat_ecdf(aes(color= target), geom = "smooth")+
+  labs(x = "Log2FoldChange (Mut/WT)", y = "Cummulative Distribution", title = "ECDF of Riboseq Expression", subtitle = "Target vs Non-target") +
+  xlim(-10,5)
+ECDF_ribo3
+
+box_targets <- ggplot(CMF_ribo3_long, aes(x = target, y = riboseq_l2fc)) +
+  geom_violin(aes(fill= target)) +
+  stat_compare_means(ref.group = "non-target", method = "t.test", aes(label=..p.adj..))
+box_targets
+
+CMF_riboseq_celltype <- merge(Riboseq_Mut, Riboseq_WT)
+
+
+# merge the target information with the riboseq information
+CMF_riboseq_wide <- merge (CMF_ribo3_long, CMF_riboseq_celltype) %>% 
+  dplyr::select(ENSG_ID, target, l2fc_MUT, l2fc_WT)
+
+CMF_riboseq_upreg_wide <- merge (CMF_ribo_upreg, CMF_riboseq_celltype) %>% 
+  dplyr::select(ENSG_ID, target, l2fc_MUT, l2fc_WT)
+
+CMF_riboseq_nochange_wide <- merge (CMF_ribo_nochange, CMF_riboseq_celltype) %>% 
+  dplyr::select(ENSG_ID, target, l2fc_MUT, l2fc_WT)
+
+CMF_riboseq_downreg_wide <- merge (CMF_ribo_downreg, CMF_riboseq_celltype) %>% 
+  dplyr::select(ENSG_ID, target, l2fc_MUT, l2fc_WT)
+
+
+# Converting to long format for plotting
+CMF_ribolong <- CMF_riboseq_wide %>%
+  pivot_longer(names_to = c(NA, "cell"), names_sep = "_", cols = c("l2fc_WT", "l2fc_MUT"), values_to = c("l2fc"))%>%
+  na.omit() %>%
+  dplyr::mutate("cell-target" = case_when(
+    cell =="WT" & target == "non-target" ~ "WT-nontarget", 
+    cell =="WT" & target == "target" ~ "WT-m6Atarget", 
+    cell == "MUT" & target == "non-target" ~ "Mut-nontarget", 
+    cell == "MUT" & target == "target" ~ "Mut-m6Atarget")) %>%
+  dplyr::mutate(`cell-target` = factor(`cell-target`, levels = c("WT-nontarget", "WT-m6Atarget", "Mut-nontarget", "Mut-m6Atarget"))) %>%
+  dplyr::mutate(target = factor(target, levels = c("target", "non-target")))
+
+# upregulated
+CMF_ribolong_upreg <- CMF_riboseq_upreg_wide %>%
+  pivot_longer(names_to = c(NA, "cell"), names_sep = "_", cols = c("l2fc_WT", "l2fc_MUT"), values_to = c("l2fc"))%>%
+  na.omit() %>%
+  dplyr::mutate("cell-target" = case_when(
+    cell =="WT" & target == "non-target" ~ "WT-nontarget", 
+    cell =="WT" & target == "target" ~ "WT-m6Atarget", 
+    cell == "MUT" & target == "non-target" ~ "Mut-nontarget", 
+    cell == "MUT" & target == "target" ~ "Mut-m6Atarget")) %>%
+  dplyr::mutate(`cell-target` = factor(`cell-target`, levels = c("WT-nontarget", "Mut-nontarget", "WT-m6Atarget", "Mut-m6Atarget"))) %>%
+  dplyr::mutate(target = factor(target, levels = c("target", "non-target")))
+
+CMF_ribolong_nochange <- CMF_riboseq_nochange_wide %>%
+  pivot_longer(names_to = c(NA, "cell"), names_sep = "_", cols = c("l2fc_WT", "l2fc_MUT"), values_to = c("l2fc"))%>%
+  na.omit() %>%
+  dplyr::mutate("cell-target" = case_when(
+    cell =="WT" & target == "non-target" ~ "WT-nontarget", 
+    cell =="WT" & target == "target" ~ "WT-m6Atarget", 
+    cell == "MUT" & target == "non-target" ~ "Mut-nontarget", 
+    cell == "MUT" & target == "target" ~ "Mut-m6Atarget")) %>%
+  dplyr::mutate(`cell-target` = factor(`cell-target`, levels = c("WT-nontarget", "Mut-nontarget", "WT-m6Atarget", "Mut-m6Atarget"))) %>%
+  dplyr::mutate(target = factor(target, levels = c("target", "non-target")))
+
+CMF_ribolong_downreg <- CMF_riboseq_downreg_wide %>%
+  pivot_longer(names_to = c(NA, "cell"), names_sep = "_", cols = c("l2fc_WT", "l2fc_MUT"), values_to = c("l2fc"))%>%
+  na.omit() %>%
+  dplyr::mutate("cell-target" = case_when(
+    cell =="WT" & target == "non-target" ~ "WT-nontarget", 
+    cell =="WT" & target == "target" ~ "WT-m6Atarget", 
+    cell == "MUT" & target == "non-target" ~ "Mut-nontarget", 
+    cell == "MUT" & target == "target" ~ "Mut-m6Atarget")) %>%
+  dplyr::mutate(`cell-target` = factor(`cell-target`, levels = c("WT-nontarget", "Mut-nontarget", "WT-m6Atarget", "Mut-m6Atarget"))) %>%
+  dplyr::mutate(target = factor(target, levels = c("target", "non-target")))
+
+```
+# KS tests, ECDF, and violin plots of riboseq data
+```{r}
+
+ECDF_riboseq_target <- ggplot(CMF_ribolong, aes(x = l2fc)) +
+  stat_ecdf(aes(color= `cell`, linetype = `target`), geom = "smooth")+
+  labs(x = "log2FoldChange (RPF/Input)", y = "Cummulative Distribution", title = "ECDF of Riboseq L2FC", subtitle = "Target vs Non-target by celltype") +
+  xlim(-10,10) 
+  #theme(legend.position="none")
+ECDF_riboseq_target
+
+
+#upregulated
+ECDF_riboseq_upreg <- ggplot(CMF_ribo_downreg, aes(x = l2fc)) +
+  stat_ecdf(aes(color= `cell`, linetype = `target`), geom = "smooth")+
+  labs(x = "log2FoldChange (RPF/Input)", y = "Cummulative Distribution", title = "ECDF of Riboseq L2FC", subtitle = "Target vs Non-target by celltype") +
+  xlim(-10,10) 
+  #theme(legend.position="none")
+ECDF_riboseq_upreg 
+
+
+# KS test of half-lives from Filter3
+WT_ribo_target <- dplyr::filter(CMF_ribolong, `cell-target` == "WT-m6Atarget")
+WT_ribo_nontarget <- dplyr::filter(CMF_ribolong, `cell-target` == "WT-nontarget")
+Mut_ribo_target <- dplyr::filter(CMF_ribolong, `cell-target` == "Mut-m6Atarget")
+Mut_ribo_nontarget <- dplyr::filter(CMF_ribolong, `cell-target` == "Mut-nontarget")
+
+
+ks.test(WT_ribo_target$l2fc, WT_ribo_nontarget$l2fc, alternative = c("two.sided"))
+ks.test(Mut_ribo_target$l2fc, Mut_ribo_nontarget$l2fc, alternative = c("two.sided"))
+ks.test(WT_ribo_target$l2fc, Mut_ribo_target$l2fc, alternative = c("two.sided"))
+ks.test(WT_ribo_nontarget$l2fc, Mut_ribo_nontarget$l2fc, alternative = c("two.sided"))
+```
+```{r}
+# VIOLIN PLOTS
+box_riboseq <- ggplot(CMF_ribolong, aes(x = `cell-target`, y = l2fc)) +
+  geom_violin(aes(fill= `cell-target`))+
+  ylim(-10,10) 
+  #stat_compare_means(ref.group = "WT-nontarget", method = "t.test", aes(label=..p.adj..))
+box_riboseq
+
+# upregulated
+box_riboseq_upreg <- ggplot(CMF_ribolong_upreg, aes(x = `cell-target`, y = l2fc)) +
+  geom_violin(aes(fill= `cell-target`))+
+  ylim(-10,10) +
+  stat_compare_means(ref.group = "WT-nontarget", method = "t.test", aes(label=..p.adj..))
+box_riboseq_upreg
+
+
+# export the wildtype vs mutant riboseq violin plot
+pdf("Riboseq_m6A_violin_plot.pdf", 
+   useDingbats=FALSE,
+    width=5, height=4)
+ box_riboseq
+ dev.off()
+
+# export the wildtype vs mutant riboseq ECDF plot
+pdf("Riboseq_m6A_ECDF_plot_dashedlines.pdf", 
+   useDingbats=FALSE,
+   width=5, height=4)
+ ECDF_riboseq_target
+ dev.off()
+
+```
+# Intersection of SLAMseq and RNAseq
+If we look at the RNAseq data and the SLAMseq data together, how do those compare? Do we see gene expression changes that go along with half-life changes? 
+```{r}
+
+SLAM_fit3_new_wide <- mutate(SLAM_fit3_new_wide, ratio = Mutant/Wildtype) 
+
+RNA_L2 <- inner_join(RNA_L1, SLAM_fit3_new_wide, by = c("ENSG_ID" = "gene_name")) %>%
+  dplyr::mutate(log10P = -1*log10(padj))
+
+volcano1 <- ggplot(RNA_L2, aes(x = l2fc, y = log10P)) +
+  geom_point(aes(color = ratio)) +
+  scale_color_viridis(discrete = FALSE, option = "D")+
+  # scale_fill_distiller(palette = "RdBu")+
+  geom_vline(xintercept = -1.5, linetype = 'dashed') + geom_vline(xintercept = 1.5, linetype = 'dashed')
+volcano1
+
+# export the SLAMseq_RNAseq plot
+pdf("SLAMseq_vs_RNAseq_volcano.pdf", 
+   useDingbats=FALSE,
+    width=5, height=4)
+volcano1
+dev.off()
+
+```
+# EMT gene signature and m6A data
+One question was how the EMT signature genes looked with regards to changes in half-life
+```{r}
+# Import EMT gene list
+EMT_genes <- readxl::read_xlsx(path = "11_EMT_intersection/EMT_gene_signature_dataset2.xlsx") %>%
+  dplyr::select(Gene)
+
+# Intersect EMT gene list with m6A list
+m6A_EMT_list <- inner_join(master_SLAM3, EMT_genes, by=c("gene_name" = "Gene"))
+
+# Convert to long format for plotting
+CMF_EMT_half <- semi_join(CMF_half_long3, m6A_EMT_list, by = c("ENSG_ID"))
+
+
+#ECDF plot of EMT genes
+ECDF_targets <- ggplot(CMF_EMT_half, aes(x = log2_half)) +
+  stat_ecdf(aes(color= cell), geom = "smooth")+
+  xlim(0,5) +
+  labs(x = "Log2 Half-life Ratio target vs non-target", y = "Cummulative Distribution", title = "ECDF of EMT genes")
+ECDF_targets
+
+box_targts <- ggplot(CMF_EMT_half, aes(x = `cell`, y = log2_half)) +
+  geom_violin(aes(fill = `cell`)) +
+  stat_compare_means(ref.group = "Wildtype", method = "t.test", aes(label=..p.adj..))
+box_targts
+
+```
